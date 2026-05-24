@@ -1,59 +1,36 @@
 #!/usr/bin/env python3
 """
 ffmpeg.py - enhance + upscale module
-Importable by enxr.py or run standalone on any mp4.
+
+Two-pass pipeline:
+  Pass A (cleanup): deblock/denoise at source resolution -- stabilize signal
+  Pass B (main):    sharpen + upscale on clean signal
+
+Quality tier is auto-detected from source bitrate (1=excellent -> 5=broken).
+Override with explicit level 1-5. Level 0 = skip.
 
 Usage:
-  python3 ffmpeg.py <####.mp4> [level 1-4] [--passes N] [--filters "f1,f2,..."]
-                               [--auto] [--720|--1080|--1440|--source]
-
-Levels:
-  1 - low      mild deblock, denoise, sharpen
-  2 - medium   deblock, DCT denoise, deband, sharpen
-  3 - high     deblock, stronger DCT denoise, deband, sharpen
-  4 - skip     no processing, file unchanged
-
-Passes:
-  Each pass upscales one step toward ceiling (default 1440p).
-  Pass 1 uses chosen level + user filters.
-  Pass 2+ uses level 1 -- source is already cleaner after pass 1.
-
-Upscale ceiling flags (optional):
-  --720      lock upscale ceiling to 720p
-  --1080     lock upscale ceiling to 1080p
-  --1440     lock upscale ceiling to 1440p (default)
-  --source   no upscale at all; passes refine in place at source resolution
-
-Auto flag:
-  --auto     skip prompt, use level 2 by default (override with explicit level)
-
-Upscale axis:
-  Portrait  (h > w): scales width axis
-  Landscape (w > h): scales height axis
-
-Extra filters via --filters inserted after core repair, before sharpening.
-Arg ordering is flexible.
+  python3 ffmpeg.py <file.mp4> [level 0-5] [--passes N]
+                               [--filters "f1,f2"] [--auto]
+                               [--720|--1080|--1440|--source]
 """
 
 import os, sys, subprocess, json
 
-from config.settings import AUTO_DEFAULT_LEVEL, UPSCALE_CEILING, UPSCALE_STEPS, SOURCE_CEILING, CEILING_MAX_PASSES
-from filters.presets import PRESETS, Preset
+from config.settings import (AUTO_DEFAULT_LEVEL, UPSCALE_CEILING, UPSCALE_STEPS,
+                              SOURCE_CEILING, CEILING_MAX_PASSES)
+from filters.presets import QualityTier, CLEANUP, MAIN
 from logger import log_error, cleanup_tmp
 
 
+# ── dimension + step helpers ─────────────────────────────────────────────────
+
 def _get_dims(path: str) -> tuple:
-    # returns (width, height, is_portrait, short_side)
-    # short_side used for step decisions so portrait and landscape
-    # both resolve correctly regardless of which axis is longer
+    """Returns (width, height, is_portrait, short_side)."""
     try:
         result = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "json", path,
-            ],
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=width,height", "-of", "json", path],
             capture_output=True, text=True, check=True,
         )
         streams = json.loads(result.stdout).get("streams", [])
@@ -69,18 +46,16 @@ def _get_dims(path: str) -> tuple:
 def _get_steps(short_side: int, ceiling: int = None) -> list:
     """
     Return ordered upscale targets from source up to ceiling.
-    ceiling=None defaults to 1440. ceiling=0 means source lock (no upscale).
-    e.g. 360p, ceiling=1080 -> [720, 1080]
-         720p, ceiling=None -> [1080, 1440]
+    ceiling=None defaults to UPSCALE_CEILING. ceiling=0 = source lock.
     """
     if ceiling == 0:
-        return []  # source lock -- no upscale steps
+        return []
     cap = ceiling if ceiling is not None else UPSCALE_CEILING
     return [t for t in UPSCALE_STEPS if short_side < t <= cap]
 
 
 def get_ceiling(short_side: int) -> int:
-    """Derive the appropriate upscale ceiling from source resolution."""
+    """Derive appropriate upscale ceiling from source resolution."""
     for threshold in sorted(SOURCE_CEILING.keys(), reverse=True):
         if short_side >= threshold:
             return SOURCE_CEILING[threshold]
@@ -88,7 +63,7 @@ def get_ceiling(short_side: int) -> int:
 
 
 def cap_passes(passes: int, ceiling: int) -> int:
-    """Cap passes to hardware/quality limit for the given ceiling."""
+    """Cap passes to quality/hardware limit for given ceiling."""
     max_p = CEILING_MAX_PASSES.get(ceiling, 2)
     if passes > max_p:
         print(f"[warn] max {max_p} passes for {ceiling}p ceiling -- running {max_p}")
@@ -96,57 +71,76 @@ def cap_passes(passes: int, ceiling: int) -> int:
     return passes
 
 
-def _filter_chain(level: int, target: int, user_filters: list = None,
-                  is_portrait: bool = False, do_upscale: bool = True) -> str:
-    """
-    Build the FFmpeg -vf filter chain for one pass.
+# ── quality detection ─────────────────────────────────────────────────────────
 
-    Filter ordering logic:
-      1. deblock        -- first on raw signal; artifacts not baked in by later filters
-      2. dctdnoiz       -- denoise on cleaner post-deblock signal; DCT-based,
-                          faster than nlmeans/fftdnoiz with good quality
-      3. deband         -- easier to detect banding after noise removed;
-                          skipped at level 1 where damage is minimal
-      4. user filters   -- repair/analysis filters here, after core repair,
-                          before sharpening so they work on a clean signal
-      5. unsharp        -- always after all repair; sharpening before repair
-                          amplifies artifacts instead of real detail
-      6. zscale         -- always after filtering; lanczos + error diffusion
-                          dithering for cleaner upscales than basic scale;
-                          skipped entirely when --source is set
-      7. format=yuv420p -- always final; VideoToolbox pixel format requirement
+def _detect_tier(path: str, w: int, h: int) -> int:
+    """
+    Detect quality tier 1-5 from bitrate normalized to 1080p equivalent.
+      1 = excellent  (>5000 kbps norm)
+      2 = good       (2500-5000)
+      3 = fair       (1000-2500)  -- typical YT Shorts
+      4 = poor       (400-1000)
+      5 = broken     (<400)
+    Falls back to tier 3 on any probe failure.
     """
     try:
-        preset = Preset(level)
-    except ValueError:
-        raise ValueError(f"invalid level: {level} -- must be 1, 2, or 3")
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=bit_rate",
+             "-of", "json", path],
+            capture_output=True, text=True, check=True,
+        )
+        bit_rate = int(json.loads(result.stdout).get("format", {}).get("bit_rate", 0))
+        if bit_rate <= 0:
+            return 3
+        norm_kbps = (bit_rate / 1000) * ((1920 * 1080) / (w * h))
+        if norm_kbps > 5000: return 1
+        if norm_kbps > 2500: return 2
+        if norm_kbps > 1000: return 3
+        if norm_kbps > 400:  return 4
+        return 5
+    except Exception:
+        return 3
 
-    p = PRESETS[preset]
-    filters = [p["deblock"], p["denoise"]]
 
-    if p["has_deband"]:
-        filters.append(p["deband"])
+# ── filter chain builders ─────────────────────────────────────────────────────
 
-    # user repair/analysis filters -- after core repair, before sharpening
+def _cleanup_chain(tier: int) -> str:
+    """
+    Table A: deblock/denoise at source resolution.
+    format=yuv420p bookends ensure VideoToolbox-compatible pixel format.
+    No sharpening -- sharpening on a dirty signal amplifies artifacts.
+    """
+    qt      = QualityTier(tier)
+    filters = list(CLEANUP[qt])
+    return ",".join(filters)
+
+
+def _main_chain(tier: int, target: int, is_portrait: bool,
+                do_upscale: bool, user_filters=None) -> str:
+    """
+    Table B: light repair + sharpen + optional upscale on cleaned signal.
+    zscale uses lanczos + error diffusion for cleanest upscale quality.
+    format=yuv420p at end is required by h264/h265_videotoolbox.
+    """
+    qt      = QualityTier(tier)
+    filters = list(MAIN[qt])
+
     if user_filters:
         filters.extend(user_filters)
 
-    # sharpening always after all repair
-    filters.append(p["sharpen"])
-
     if do_upscale:
-        # zscale after filtering -- lanczos + error diffusion dithering
-        # portrait: scale width axis; landscape: scale height axis
         if is_portrait:
-            filters.append(f"zscale=w={target}:h=-2:filter=lanczos:dither=error_diffusion")
+            filters.append(
+                f"zscale=w={target}:h=-2:filter=lanczos:dither=error_diffusion")
         else:
-            filters.append(f"zscale=w=-2:h={target}:filter=lanczos:dither=error_diffusion")
+            filters.append(
+                f"zscale=w=-2:h={target}:filter=lanczos:dither=error_diffusion")
 
-    # format=yuv420p always last -- VideoToolbox pixel format requirement
     filters.append("format=yuv420p")
-
     return ",".join(filters)
 
+
+# ── encoder ───────────────────────────────────────────────────────────────────
 
 def _try_encode(cmd: list) -> bool:
     """Attempt an ffmpeg encode. Returns True on success, False on failure."""
@@ -157,98 +151,86 @@ def _try_encode(cmd: list) -> bool:
         return False
 
 
-def _encode(path: str, tmp_path: str, vf: str) -> None:
+def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> None:
     """
-    Encode with h264_videotoolbox (hardware, fastest) first.
-    -hwaccel none forces software decode on input -- required when source is
-    AV1 or other codecs VT can't decode natively, otherwise VT rejects the
-    frame format even though it's compiled in.
-    Falls back to libkvazaar (software H.265) if VT fails.
-    Falls back to libx264 (Windows testing) if libkvazaar unavailable.
+    Encode with h264_videotoolbox (hardware H.264) first.
+    Falls back to hevc_videotoolbox (hardware H.265) if H.264 VT fails.
+    Falls back to libx264 (software, Windows/Linux) if both VT encoders fail.
+    -hwaccel none forces software decode -- required for AV1/non-native codecs.
     Audio always aac. Metadata always stripped.
+
+    high_quality: True for intermediate cleanup pass -- minimises generation
+    loss before the main pass runs. VideoToolbox uses -q:v 85 (out of 100);
+    libx264 uses -crf 18 (near-lossless). Final passes use encoder defaults.
     """
     base_args = [
         "ffmpeg", "-y",
-        "-hwaccel", "none",     # force software decode so VT accepts any input codec
+        "-hwaccel", "none",
         "-i", path,
-        "-map", "0:v:0",        # best video stream only
-        "-map", "0:a:0",        # best audio stream only
+        "-map", "0:v:0",
+        "-map", "0:a:0",
         "-c:a", "aac",
         "-vf", vf,
-        "-map_metadata", "-1",  # strip all metadata
+        "-map_metadata", "-1",
     ]
 
-    # hardware H.264 -- fastest, capture_output=True so silent failure doesn't flood terminal
-    if _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path]):
+    vt_q   = ["-q:v", "85"] if high_quality else []
+    x264_q = ["-crf", "18"] if high_quality else []
+
+    if _try_encode(base_args + ["-c:v", "h264_videotoolbox"] + vt_q + [tmp_path]):
         return
 
-    # libkvazaar fallback (iOS/macOS builds without VT)
-    if _try_encode(base_args + ["-c:v", "libkvazaar", tmp_path]):
-        print("[ffmpeg] VideoToolbox unavailable, used libkvazaar (H.265)")
+    if _try_encode(base_args + ["-c:v", "hevc_videotoolbox"] + vt_q + [tmp_path]):
+        print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
         return
 
-    # libx264 fallback (Windows testing)
-    print("[ffmpeg] VideoToolbox unavailable, falling back to libx264 (H.264)")
-    subprocess.run(base_args + ["-c:v", "libx264", tmp_path], check=True)
+    print("[ffmpeg] VideoToolbox unavailable, falling back to libx264")
+    subprocess.run(base_args + ["-c:v", "libx264"] + x264_q + [tmp_path], check=True)
 
 
-def prompt_level(batch: bool = False, skip_prompts: bool = False) -> int:
-    """
-    Prompt for enhancement level 1-4.
-    skip_prompts: if True, return AUTO_DEFAULT_LEVEL (from session context)
-    """
-    if skip_prompts:
-        return AUTO_DEFAULT_LEVEL
-
-    print("\nchoose level 1-4")
-    print("  1 - low")
-    print("  2 - medium")
-    print("  3 - high")
-    print(f"  4 - {'skip all' if batch else 'skip'}")
-    while True:
-        choice = input("enter: ").strip()
-        if choice in ("1", "2", "3", "4"):
-            return int(choice)
-        print("  invalid, enter 1-4")
-
+# ── main enhance loop ─────────────────────────────────────────────────────────
 
 def enhance(path: str, level: int = None, user_filters: list = None,
             passes: int = 1, ceiling: int = None, out_dir: str = None) -> str:
     """
-    Restore and upscale a ####.mp4, optionally across multiple passes.
+    Two-pass restoration + upscale pipeline.
 
-    ceiling: upscale target cap. None=1440, 0=source lock (enhance only).
-    All passes use the chosen level and user filters.
+    Pass A (cleanup): stabilize signal at source resolution using Table A preset.
+    Pass B (main):    sharpen + upscale using Table B preset, N times.
 
-    Returns ex####.mp4 on success, ####.mp4 if skipped or failed.
+    level: quality tier override 1-5, or None for auto-detect.
+           0 = skip all processing.
+    ceiling: upscale cap. None=auto from source, 0=source lock.
+    out_dir: final output directory (defaults to same dir as input).
+
+    Returns output path on success, original path on skip/failure.
     """
     path = os.path.abspath(os.path.expanduser(path))
     if not os.path.isfile(path):
         raise FileNotFoundError(f"file not found: {path}")
 
     w, h, is_portrait, short_side = _get_dims(path)
-    dirname  = os.path.dirname(path)
-    name     = os.path.splitext(os.path.basename(path))[0]
+    dirname   = os.path.dirname(path)
+    name      = os.path.splitext(os.path.basename(path))[0]
     final_dir = out_dir if out_dir else dirname
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    is_high_res = (short_side >= 1440)
+    if level == 0:
+        return path
+
+    is_high_res = (short_side >= UPSCALE_CEILING)
     source_lock = (ceiling == 0)
 
-    # >= 1440p short side: skip unless source lock (ceiling=0) where user
-    # explicitly wants enhancement passes at native resolution
     if is_high_res and not source_lock:
         return path
 
-    if level is None:
-        level = prompt_level()
-
-    if level == 4:
-        return path
+    # Auto-detect tier if no override given
+    tier = level if level else _detect_tier(path, w, h)
+    tier = max(1, min(5, tier))
+    print(f"[ffmpeg] quality tier {tier} ({QualityTier(tier).name.lower()})")
 
     if source_lock:
-        # source lock -- enhance passes times at source resolution, no upscale
         step_list   = [short_side] * passes
         do_upscales = [False] * passes
     else:
@@ -260,65 +242,95 @@ def enhance(path: str, level: int = None, user_filters: list = None,
     current_path   = path
     current_height = short_side
 
-    for i, target in enumerate(step_list):
-        is_last      = (i == len(step_list) - 1)
-        do_upscale   = do_upscales[i]
-        pass_level   = level
-        pass_filters = user_filters
+    # ── Pass A: cleanup at source resolution ──────────────────────────────────
+    cleanup_vf   = _cleanup_chain(tier)
+    cleanup_path = os.path.join(dirname, f"tmp_{name}_cleanup.mp4")
+    tmp_enc      = os.path.join(dirname, f"tmp_{name}_enc.mp4")
 
-        tmp_path = os.path.join(dirname, f"tmp_{name}_enc.mp4")
-        out_path = os.path.join(final_dir, f"ex{name}.mp4") if is_last \
-                   else os.path.join(dirname, f"tmp_{name}_p{i + 1}.mp4")
+    print(f"[ffmpeg] cleanup: {short_side}p (tier {tier})")
+    try:
+        _encode(current_path, tmp_enc, cleanup_vf, high_quality=True)
+        os.replace(tmp_enc, cleanup_path)
+        current_path = cleanup_path
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        log_error("enhance_cleanup", e, extra=f"file={os.path.basename(path)}")
+        cleanup_tmp(dirname)
+        return path
+
+    # ── Pass B: main passes (sharpen + upscale) ───────────────────────────────
+    for i, target in enumerate(step_list):
+        is_last  = (i == len(step_list) - 1)
+        do_up    = do_upscales[i]
 
         if source_lock and i >= 2:
-            print(f"[warn] pass {i + 1} -- verify output quality, diminishing returns likely")
+            print(f"[warn] pass {i + 1} -- diminishing returns likely")
 
-        if do_upscale:
-            print(f"[ffmpeg] pass {i + 1}/{len(step_list)}: {current_height}p -> {target}p (level {pass_level})")
+        if do_up:
+            print(f"[ffmpeg] main {i + 1}/{len(step_list)}: "
+                  f"{current_height}p -> {target}p")
         else:
-            # source lock -- refining in place, no resolution change
-            print(f"[ffmpeg] pass {i + 1}/{len(step_list)}: {current_height}p refine (level {pass_level})")
+            print(f"[ffmpeg] main {i + 1}/{len(step_list)}: "
+                  f"{current_height}p refine")
 
-        vf = _filter_chain(pass_level, target, pass_filters, is_portrait, do_upscale)
+        main_vf  = _main_chain(tier, target, is_portrait, do_up, user_filters)
+        out_path = (os.path.join(final_dir, f"ex{name}.mp4") if is_last
+                    else os.path.join(dirname, f"tmp_{name}_p{i + 1}.mp4"))
 
         try:
-            _encode(current_path, tmp_path, vf)
-            os.replace(tmp_path, out_path)
+            _encode(current_path, tmp_enc, main_vf)
+            os.replace(tmp_enc, out_path)
 
-            # remove intermediate pass file after it's been used as input
-            if current_path != path:
+            if current_path != path and os.path.exists(current_path):
                 os.remove(current_path)
 
             current_path   = out_path
-            current_height = target if do_upscale else current_height
+            current_height = target if do_up else current_height
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
-            log_error("enhance", e, extra=f"file={os.path.basename(path)} pass={i+1}/{len(step_list)}")
+            log_error("enhance_main", e,
+                      extra=f"file={os.path.basename(path)} pass={i+1}")
             cleanup_tmp(dirname)
             if current_path != path and os.path.exists(current_path):
                 os.remove(current_path)
-            return path  # keep original on failure
+            return path
 
-    # remove original ####.mp4 after all passes succeed
+    # Remove original after all passes succeed
     if os.path.exists(path) and current_path != path:
         os.remove(path)
 
     return current_path
 
 
-# CLI
+# ── prompt (standalone CLI use) ───────────────────────────────────────────────
+
+def prompt_level(skip_prompts: bool = False) -> int:
+    if skip_prompts:
+        return AUTO_DEFAULT_LEVEL
+    print("\nchoose tier 1-5 (or 0 to skip)")
+    print("  0 - skip")
+    print("  1 - excellent source  (sharpen only)")
+    print("  2 - good source       (light restore)")
+    print("  3 - fair / typical YT (standard)")
+    print("  4 - poor / compressed (aggressive)")
+    print("  5 - broken source     (max restore)")
+    while True:
+        choice = input("tier (0-5, enter for auto): ").strip()
+        if choice == "":
+            return None
+        if choice in ("0", "1", "2", "3", "4", "5"):
+            return int(choice)
+        print("  invalid, enter 0-5 or press enter for auto")
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
 def _parse_args(args: list):
-    """
-    Flexible arg parser.
-    Accepts path, level, --passes, --filters, --auto, --720/1080/1440/source
-    in any order.
-    """
     path         = None
     level        = None
     user_filters = None
     passes       = 1
     auto         = False
-    ceiling      = None  # None = default up to 1440
+    ceiling      = None
 
     i = 0
     while i < len(args):
@@ -342,9 +354,9 @@ def _parse_args(args: list):
             ceiling = 1440
             i += 1
         elif a == "--source":
-            ceiling = 0  # no upscale, refine in place
+            ceiling = 0
             i += 1
-        elif a.isdigit() and 1 <= int(a) <= 4 and level is None:
+        elif a.isdigit() and 0 <= int(a) <= 5 and level is None:
             level = int(a)
             i += 1
         elif path is None and not a.startswith("--"):
@@ -353,7 +365,6 @@ def _parse_args(args: list):
         else:
             i += 1
 
-    # --auto uses AUTO_DEFAULT_LEVEL unless explicit level given
     if auto and level is None:
         level = AUTO_DEFAULT_LEVEL
 

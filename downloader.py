@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-downloader.py — core download module
+downloader.py -- core download module
 Importable by parent project or run standalone.
 
 Usage:
@@ -15,9 +15,27 @@ from urllib.parse import urlparse
 from config.settings import DEFAULT_DEST, BATCH_DEST, BATCH_WORKERS, BATCH_FRAGMENT_THREADS
 
 
+# ── Shared download settings ──────────────────────────────────────────────────
+# Single source of truth -- _yt_opts and batch _dl_one both extend this.
+# Changes here apply everywhere.
+_DL_BASE = {
+    "format":                        "bestvideo+bestaudio/best",
+    "merge_output_format":           "mp4",
+    "concurrent_fragment_downloads": 16,
+    "buffersize":                    16 * 1024,      # int required (not "16K") via Python API
+    "http_chunk_size":               10 * 1024 * 1024,
+    "retries":                       10,
+    "fragment_retries":              10,
+    "throttledratelimit":            100 * 1024,     # re-fetch fragment if speed drops below 100 KB/s
+    "socket_timeout":                30,
+    "noplaylist":                    True,           # safety -- callers set False when needed
+}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
 def _rand_id(dest: str) -> str:
-    # generate a random 4-digit ID that doesn't already exist at dest
-    # avoids silent overwrite in batch downloads
+    """Collision-safe 4-digit ID that doesn't already exist at dest."""
     while True:
         file_id = f"{random.randint(0, 9999):04d}"
         if not os.path.exists(os.path.join(dest, f"{file_id}.mp4")):
@@ -26,20 +44,27 @@ def _rand_id(dest: str) -> str:
 
 def _yt_opts(dest: str, file_id: str) -> dict:
     return {
-        "format":                        "bestvideo+bestaudio/best",
-        "merge_output_format":           "mp4",
-        "outtmpl":                       os.path.join(dest, f"{file_id}.%(ext)s"),
-        "noplaylist":                    True,
-        "concurrent_fragment_downloads": 16,
-        "buffersize":                    16 * 1024,  # must be int when passed programmatically; "16K" only works via CLI
-        "http_chunk_size":               10 * 1024 * 1024,
-        "quiet":                         False,
-        "no_warnings":                   False,
+        **_DL_BASE,
+        "outtmpl":     os.path.join(dest, f"{file_id}.%(ext)s"),
+        "quiet":       False,
+        "no_warnings": False,
     }
 
 
 def _is_url(s: str) -> bool:
     return s.startswith(("http://", "https://", "ftp://"))
+
+
+def _detect_playlist(url: str) -> tuple:
+    """Flat probe -- returns (is_playlist: bool, count: int).
+    Fast: no download, just metadata. Returns (False, 0) on any error."""
+    try:
+        with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "noplaylist": False}) as ydl:
+            info = ydl.extract_info(url, download=False)
+        entries = info.get("entries")
+        return (True, len(entries)) if entries else (False, 1)
+    except Exception:
+        return (False, 0)
 
 
 def _copy_file(src: str, dest_dir: str) -> str:
@@ -64,25 +89,8 @@ def _copy_file(src: str, dest_dir: str) -> str:
     return dest
 
 
-def download(source: str, dest: str = DEFAULT_DEST) -> str:
-    """
-    Download a URL or copy a local mp4 to dest.
-    Returns the output path on success, raises on failure.
-    """
-    os.makedirs(dest, exist_ok=True)
-
-    if _is_url(source):
-        file_id  = _rand_id(dest)       # collision-safe ID
-        out_path = os.path.join(dest, f"{file_id}.mp4")
-        with yt_dlp.YoutubeDL(_yt_opts(dest, file_id)) as ydl:
-            ydl.download([source])
-        return out_path
-    else:
-        return _copy_file(source, dest)
-
-
 def _channel_name_from_url(url: str) -> str:
-    """Extract a filesystem-safe channel name from a YouTube channel URL."""
+    """Filesystem-safe channel name from a YouTube channel/playlist URL."""
     m = re.search(r'/@([^/?#]+)', url)
     if m:
         return m.group(1)
@@ -93,6 +101,24 @@ def _channel_name_from_url(url: str) -> str:
     return re.sub(r'[^\w\-]', '_', slug) or 'batch'
 
 
+# ── Public API ────────────────────────────────────────────────────────────────
+
+def download(source: str, dest: str = DEFAULT_DEST) -> str:
+    """
+    Download a single URL or copy a local mp4 to dest.
+    Returns the output path on success, raises on failure.
+    """
+    os.makedirs(dest, exist_ok=True)
+
+    if _is_url(source):
+        file_id = _rand_id(dest)
+        with yt_dlp.YoutubeDL(_yt_opts(dest, file_id)) as ydl:
+            ydl.download([source])
+        return os.path.join(dest, f"{file_id}.mp4")
+    else:
+        return _copy_file(source, dest)
+
+
 def download_batch(url: str, dest: str = BATCH_DEST,
                    playlist_items: str = None) -> tuple:
     """
@@ -101,9 +127,8 @@ def download_batch(url: str, dest: str = BATCH_DEST,
     playlist_items: yt-dlp selection string e.g. "1-50" or "1,3,6,22" or None for all.
     Returns (list_of_paths, channel_dir).
     """
-    # Request higher CPU priority for a-shell
     try:
-        os.nice(-5)
+        os.nice(-5)   # request higher CPU priority (no-op on non-Unix, safe to ignore)
     except Exception:
         pass
 
@@ -112,7 +137,7 @@ def download_batch(url: str, dest: str = BATCH_DEST,
     noenx_dir   = os.path.join(channel_dir, "noenx")
     os.makedirs(noenx_dir, exist_ok=True)
 
-    # Fetch flat playlist to know what we're downloading before starting
+    # Flat probe respecting playlist_items filter so count is accurate
     print("[batch] fetching playlist...")
     flat_opts = {"quiet": True, "extract_flat": True, "noplaylist": False}
     if playlist_items:
@@ -134,13 +159,9 @@ def download_batch(url: str, dest: str = BATCH_DEST,
         if not entry_url:
             return None
         opts = {
-            "format":                        "bestvideo+bestaudio/best",
-            "merge_output_format":           "mp4",
+            **_DL_BASE,
             "outtmpl":                       os.path.join(tmp_dir, "%(id)s.%(ext)s"),
-            "noplaylist":                    True,
             "concurrent_fragment_downloads": BATCH_FRAGMENT_THREADS,
-            "buffersize":                    16 * 1024,
-            "http_chunk_size":               10 * 1024 * 1024,
             "quiet":                         True,
             "no_warnings":                   True,
         }
@@ -190,6 +211,14 @@ def main() -> None:
     errors = []
     for source in args:
         try:
+            if _is_url(source):
+                is_playlist, count = _detect_playlist(source)
+                if is_playlist:
+                    print(f"[playlist] {count} video(s) detected -- downloading all to {BATCH_DEST}")
+                    files, _ = download_batch(source)
+                    for f in files:
+                        print(f"[OK] {f}")
+                    continue
             out = download(source)
             print(f"[OK] {out}")
         except Exception as e:

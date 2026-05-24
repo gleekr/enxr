@@ -19,12 +19,12 @@ Examples:
   SKIP_PROMPTS=1 python3 enxr.py ~/Downloads/video.mp4
 """
 
-import os, sys, subprocess
+import os, sys
 
 from downloader import download, download_batch, DEFAULT_DEST
-from ffmpeg import _get_dims
+from ffmpeg import _get_dims, get_ceiling
 from logger import log_error
-from config.settings import UPSCALE_CEILING, UPRES_DEST, BATCH_DEST
+from config.settings import UPRES_DEST, BATCH_DEST
 import enxgui
 
 
@@ -37,6 +37,15 @@ class Color:
     BOLD = '\033[1m'
     DIM = '\033[2m'
     RESET = '\033[0m'
+
+
+def _input(prompt: str) -> str:
+    """input() wrapper -- type 'exit', 'quit', or 'q' at any prompt to quit."""
+    val = input(prompt).strip()
+    if val.lower() in ('exit', 'quit', 'q'):
+        print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
+        sys.exit(0)
+    return val
 
 
 def _check_skip_context() -> bool:
@@ -68,7 +77,7 @@ def print_menu():
 def prompt_choice() -> str:
     """Get menu choice."""
     while True:
-        choice = input(f"{Color.BOLD}Enter (1-7):{Color.RESET} ").strip()
+        choice = _input(f"{Color.BOLD}Enter (1-7):{Color.RESET} ")
         if choice in ('1', '2', '3', '4', '5', '6', '7'):
             return choice
         print(f"  {Color.RED}invalid, enter 1-7{Color.RESET}")
@@ -76,7 +85,7 @@ def prompt_choice() -> str:
 
 def prompt_url() -> str:
     """Get URL from user."""
-    url = input(f"{Color.BOLD}Paste URL:{Color.RESET} ").strip()
+    url = _input(f"{Color.BOLD}Paste URL:{Color.RESET} ")
     if not url.startswith(('http://', 'https://', 'ftp://')):
         print(f"  {Color.RED}invalid URL{Color.RESET}")
         return prompt_url()
@@ -85,7 +94,7 @@ def prompt_url() -> str:
 
 def prompt_file(prompt_text: str = "Enter file path") -> str:
     """Get file path from user."""
-    path = input(f"{Color.BOLD}{prompt_text}:{Color.RESET} ").strip()
+    path = _input(f"{Color.BOLD}{prompt_text}:{Color.RESET} ")
     path = os.path.abspath(os.path.expanduser(path))
 
     if not os.path.isfile(path):
@@ -105,7 +114,7 @@ def prompt_passes(skip: bool = False) -> int:
     print("  2+ = refinement passes (slower, better quality)")
 
     while True:
-        choice = input(f"{Color.BOLD}Passes (1-4):{Color.RESET} ").strip()
+        choice = _input(f"{Color.BOLD}Passes (1-4):{Color.RESET} ")
         if choice.isdigit() and 1 <= int(choice) <= 4:
             return int(choice)
         print(f"  {Color.RED}invalid, enter 1-4{Color.RESET}")
@@ -172,7 +181,8 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
         options = enxgui._calculate_upscale_options(short_side, is_portrait)
         enxgui._print_streams_detected(w, h, short_side, is_portrait, options)
 
-        is_high_res = (short_side >= UPSCALE_CEILING)
+        ceiling     = get_ceiling(short_side)
+        is_high_res = (ceiling == 0)
         should_upscale = enxgui.prompt_upscale(skip_prompts, is_high_res)
 
         if not should_upscale:
@@ -180,16 +190,14 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
             return
 
         level = enxgui.prompt_level(skip_prompts)
-        if level == 4:
-            print(f"\n{Color.YELLOW}Level 4: Skipped.{Color.RESET}")
+        if level == 0:
+            print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
             return
 
         passes = prompt_passes(skip_prompts)
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         from ffmpeg import enhance
-
-        ceiling = 0 if is_high_res else UPSCALE_CEILING
         out = enhance(file_path, level=level, user_filters=None, passes=passes, ceiling=ceiling, out_dir=UPRES_DEST)
 
         print(f"\n{Color.GREEN}* Complete!{Color.RESET} {out}")
@@ -218,7 +226,7 @@ def action_batch_folder(skip_prompts: bool = False):
     for f in mp4_files:
         print(f"  {f}")
 
-    confirm = input(f"\n{Color.BOLD}Enhance all? (yes/no):{Color.RESET} ").strip().lower()
+    confirm = _input(f"\n{Color.BOLD}Enhance all? (yes/no):{Color.RESET} ").lower()
     if confirm not in ('y', 'yes'):
         return
 
@@ -234,7 +242,7 @@ def action_batch_folder(skip_prompts: bool = False):
         try:
             from ffmpeg import enhance
             _, _, _, short_side = _get_dims(file_path)
-            ceiling = 0 if short_side >= UPSCALE_CEILING else UPSCALE_CEILING
+            ceiling = get_ceiling(short_side)
 
             out = enhance(file_path, level=2, user_filters=None, passes=passes, ceiling=ceiling)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
@@ -260,17 +268,17 @@ def prompt_batch_selection() -> str:
     print(f"{Color.CYAN}-------------------------------------------{Color.RESET}")
 
     while True:
-        choice = input(f"{Color.BOLD}Choice (1-3):{Color.RESET} ").strip()
+        choice = _input(f"{Color.BOLD}Choice (1-3):{Color.RESET} ")
         if choice == "1":
             return None
         elif choice == "2":
             while True:
-                n = input(f"{Color.BOLD}How many:{Color.RESET} ").strip()
+                n = _input(f"{Color.BOLD}How many:{Color.RESET} ")
                 if n.isdigit() and int(n) > 0:
                     return f"1-{n}"
                 print(f"  {Color.RED}enter a number{Color.RESET}")
         elif choice == "3":
-            val = input(f"{Color.BOLD}Indices:{Color.RESET} ").strip()
+            val = _input(f"{Color.BOLD}Indices:{Color.RESET} ")
             if val:
                 return val
             print(f"  {Color.RED}enter at least one index{Color.RESET}")
@@ -308,7 +316,7 @@ def action_channel_shorts(skip_prompts: bool = False):
     print(f"{Color.BOLD}upres/{Color.RESET}    enhanced output")
     print(f"{Color.CYAN}-------------------------------------------{Color.RESET}")
 
-    confirm = input(f"\n{Color.BOLD}Enhance all? (yes/no):{Color.RESET} ").strip().lower()
+    confirm = _input(f"\n{Color.BOLD}Enhance all? (yes/no):{Color.RESET} ").lower()
     if confirm not in ('y', 'yes'):
         print(f"\n{Color.YELLOW}Skipped enhancement.{Color.RESET}")
         return
@@ -324,7 +332,7 @@ def action_channel_shorts(skip_prompts: bool = False):
         try:
             from ffmpeg import enhance
             _, _, _, short_side = _get_dims(file_path)
-            ceiling = 0 if short_side >= UPSCALE_CEILING else UPSCALE_CEILING
+            ceiling = get_ceiling(short_side)
             out = enhance(file_path, level=2, user_filters=None, passes=passes,
                           ceiling=ceiling, out_dir=upres_dir)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
@@ -384,7 +392,7 @@ def main():
             print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
             sys.exit(0)
 
-        input(f"\n{Color.DIM}Press Enter to continue...{Color.RESET}")
+        _input(f"\n{Color.DIM}Press Enter to continue (or 'exit' to quit)...{Color.RESET}")
 
 
 if __name__ == "__main__":
