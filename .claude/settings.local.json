@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py)",
+      "Bash(python main.py --help)",
+      "Bash(python downloader.py https://www.youtube.com/shorts/3HiJYYIupd4)",
+      "Bash(ls ~/Downloads/*.mp4)",
+      "Read(//c/Users/Yim Yem/Downloads/**)",
+      "Bash(python enx.py ~/Downloads/videoplayback.mp4 2 --passes 1)",
+      "Bash(python enxr.py)"
+    ]
+  }
+}
