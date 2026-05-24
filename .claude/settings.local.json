@@ -7,7 +7,12 @@
       "Bash(ls ~/Downloads/*.mp4)",
       "Read(//c/Users/Yim Yem/Downloads/**)",
       "Bash(python enx.py ~/Downloads/videoplayback.mp4 2 --passes 1)",
-      "Bash(python enxr.py)"
+      "Bash(python enxr.py)",
+      "Bash(git remote *)",
+      "Bash(python enxr.py --help)",
+      "Bash(python -c ' *)",
+      "Bash(ls \"C:\\\\ProgramData\\\\xmk\\\\originals\" 2>/dev/null || echo \"not found\")",
+      "Read(//c/ProgramData/xmk/originals/**)"
     ]
   }
 }
