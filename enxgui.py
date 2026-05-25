@@ -11,8 +11,12 @@ Usage:
 
 import os, sys, re
 
-from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier
+import time
+
+from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier, _main_chain
 from config.settings import UPSCALE_CEILING, UPSCALE_STEPS
+from calibration import (load_calibration, run_calibration, estimate_time,
+                         update_calibration, get_duration)
 
 
 class Color:
@@ -225,10 +229,35 @@ def main() -> None:
             target_res = prompt_target_res(options, skip_all_prompts)
             passes     = passes_override if passes_override else prompt_passes(skip_all_prompts)
 
+        # Render time estimate / calibration
+        duration = get_duration(path)
+        cal      = load_calibration()
+        cal_key  = str(target_res)
+        if cal_key not in cal:
+            print(f"\n  {Color.DIM}[first run] calibrating encoder speed...{Color.RESET}")
+            try:
+                cal_vf = _main_chain(tier, target_res, is_portrait,
+                                     target_res > short_side)
+                run_calibration(path, cal_vf, target_res)
+                cal = load_calibration()
+            except Exception:
+                pass
+        if cal_key in cal and duration > 0:
+            est = estimate_time(duration, passes, target_res, cal)
+            if est:
+                label = f"{passes} pass{'es' if passes > 1 else ''} at {target_res}p"
+                print(f"  {Color.DIM}Estimated time: {est}  ({label}){Color.RESET}")
+
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
+        t0  = time.time()
         out = enhance(path, level=level, user_filters=None,
                       passes=passes, target_res=target_res,
                       ceiling=0 if is_high_res else None)
+        elapsed = time.time() - t0
+        try:
+            update_calibration(target_res, elapsed, duration)
+        except Exception:
+            pass
         print(f"\n{Color.GREEN}* Done!{Color.RESET} {out}")
 
     except Exception as e:

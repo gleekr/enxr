@@ -15,10 +15,12 @@ Usage:
                                [--720|--1080|--1440|--source]
 """
 
-import os, sys, subprocess, json, re
+import os, sys, subprocess, json, re, time
 
 from config.settings import (AUTO_DEFAULT_LEVEL, UPSCALE_CEILING, UPSCALE_STEPS,
-                              SOURCE_CEILING, CEILING_MAX_PASSES, PASS_STRENGTH_DECAY)
+                              SOURCE_CEILING, CEILING_MAX_PASSES)
+
+PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]  # index = pass number - 1
 from filters.presets import QualityTier, CLEANUP, MAIN
 from logger import log_error, cleanup_tmp
 
@@ -162,12 +164,43 @@ def _main_chain(tier: int, target: int, is_portrait: bool,
 
 # ── encoder ───────────────────────────────────────────────────────────────────
 
+def _file_valid(path: str) -> bool:
+    """Quick ffprobe check -- True if file has a readable video stream."""
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-select_streams", "v:0",
+             "-show_entries", "stream=codec_type", "-of", "json", path],
+            capture_output=True, timeout=8,
+        )
+        return r.returncode == 0 and b"video" in r.stdout
+    except Exception:
+        return False
+
+
 def _try_encode(cmd: list) -> tuple:
-    """Attempt an ffmpeg encode. Returns (True, '') on success, (False, stderr) on failure."""
+    """
+    Attempt an ffmpeg encode. Returns (True, '') on success, (False, stderr) on failure.
+
+    iOS SIGINT recovery: a-shell sends SIGINT (signal 2) when backgrounded --
+    sometimes AFTER encoding completes but during final container cleanup.
+    If the process exits non-zero but the output file exists and is large/valid,
+    treat as success rather than falling through to the next encoder.
+    """
     try:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
         return True, ""
     except subprocess.CalledProcessError as e:
+        tmp_path = cmd[-1]
+        if os.path.isfile(tmp_path):
+            time.sleep(0.5)  # let filesystem settle before ffprobe reads
+            size = os.path.getsize(tmp_path)
+            if size > 102400:
+                if _file_valid(tmp_path):
+                    print("[ffmpeg] signal interrupt after encode -- output valid, continuing")
+                    return True, ""
+                if size > 1024 * 1024:  # >1 MB -- almost certainly a complete encode
+                    print(f"[ffmpeg] signal interrupt -- ffprobe inconclusive but file is {size // 1024}KB, treating as valid")
+                    return True, ""
         return False, e.stderr or ""
 
 

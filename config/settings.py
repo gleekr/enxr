@@ -3,9 +3,6 @@ import os
 # ── Enhancement defaults ──────────────────────────────────────────────────────
 AUTO_DEFAULT_LEVEL = 2
 
-# Strength decay per pass index (index 0 = pass 1, full strength)
-PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]
-
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DEFAULT_DEST = os.path.expanduser("~/Documents/outputs/original")   # single-file download dest
 UPRES_DEST   = os.path.expanduser("~/Documents/outputs/enhanced")   # single-file enhanced output
