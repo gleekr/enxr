@@ -24,12 +24,11 @@ import os, sys
 import time
 
 from downloader import download, download_batch, DEFAULT_DEST
-from ffmpeg import _get_dims, get_ceiling, enhance
+from ffmpeg import _get_dims, get_ceiling, enhance, _main_chain
 from logger import log_error
 from config.settings import UPRES_DEST, BATCH_DEST, UPSCALE_CEILING
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
-from ffmpeg import _main_chain
 import enxgui
 
 
@@ -115,8 +114,8 @@ def prompt_passes(skip: bool = False) -> int:
         return 1
 
     print(f"\n{Color.BOLD}Enhancement passes:{Color.RESET}")
-    print("  1 = single upscale")
-    print("  2+ = refinement passes (slower, better quality)")
+    print("  1 = single enhancement")
+    print("  2+ = refinement passes (strength auto-reduces each pass)")
 
     while True:
         choice = _input(f"{Color.BOLD}Passes (1-4):{Color.RESET} ")
@@ -245,8 +244,9 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
             update_calibration(target_res, elapsed, duration)
         except Exception:
             pass
-
-        print(f"\n{Color.GREEN}* Complete!{Color.RESET} {out}")
+        mins, secs = divmod(int(elapsed), 60)
+        t_str = f"{mins}m {secs:02d}s" if mins else f"{secs}s"
+        print(f"\n{Color.GREEN}* Complete!{Color.RESET} {out}  {Color.DIM}({t_str}){Color.RESET}")
 
     except Exception as e:
         log_error("enhance_file", e, extra=f"file={file_path}")
@@ -286,7 +286,6 @@ def action_batch_folder(skip_prompts: bool = False):
         print(f"\n{Color.CYAN}Processing: {filename}{Color.RESET}")
 
         try:
-            from ffmpeg import enhance
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
 
@@ -376,7 +375,6 @@ def action_channel_shorts(skip_prompts: bool = False):
         filename = os.path.basename(file_path)
         print(f"{Color.CYAN}Processing: {filename}{Color.RESET}")
         try:
-            from ffmpeg import enhance
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
             out = enhance(file_path, level=2, user_filters=None, passes=passes,

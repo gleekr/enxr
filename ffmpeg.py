@@ -353,7 +353,7 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
         _encode(current_path, tmp_enc, cleanup_vf, high_quality=True)
         os.replace(tmp_enc, cleanup_path)
         current_path = cleanup_path
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+    except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError) as e:
         log_error("enhance_cleanup", e, extra=f"file={os.path.basename(path)}")
         cleanup_tmp(dirname)
         return path
@@ -402,7 +402,7 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
             current_path   = out_path
             current_height = eff_target if pass_up else current_height
 
-        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError) as e:
             log_error("enhance_main", e,
                       extra=f"file={os.path.basename(path)} pass={i + 1}")
             cleanup_tmp(dirname)
