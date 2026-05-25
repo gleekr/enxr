@@ -151,6 +151,16 @@ def _try_encode(cmd: list) -> tuple:
         return False, e.stderr or ""
 
 
+def _ffmpeg_errors(stderr: str) -> str:
+    """Extract meaningful lines from ffmpeg stderr -- skips progress/info noise."""
+    if not stderr.strip():
+        return "encode failed (no output)"
+    keywords = ("error", "failed", "invalid", "unknown", "not found", "videotoolbox", "cannot")
+    lines = stderr.strip().splitlines()
+    relevant = [l.strip() for l in lines if any(k in l.lower() for k in keywords)]
+    return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() or "encode failed")
+
+
 def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> None:
     """
     Encode with h264_videotoolbox (hardware H.264) first.
@@ -180,16 +190,18 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
     ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox"] + vt_q + [tmp_path])
     if ok:
         return
-    log_error("h264_videotoolbox", RuntimeError(err.strip().splitlines()[-1] if err.strip() else "encode failed"))
+    log_error("h264_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
     ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox"] + vt_q + [tmp_path])
     if ok:
         print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
         return
-    log_error("hevc_videotoolbox", RuntimeError(err.strip().splitlines()[-1] if err.strip() else "encode failed"))
+    log_error("hevc_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
     print("[ffmpeg] VideoToolbox unavailable, falling back to libx264")
-    subprocess.run(base_args + ["-c:v", "libx264"] + x264_q + [tmp_path], check=True)
+    ok, err = _try_encode(base_args + ["-c:v", "libx264"] + x264_q + [tmp_path])
+    if not ok:
+        raise RuntimeError(f"libx264 fallback failed: {_ffmpeg_errors(err)}")
 
 
 # ── main enhance loop ─────────────────────────────────────────────────────────
