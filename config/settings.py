@@ -4,9 +4,9 @@ import os
 AUTO_DEFAULT_LEVEL = 2
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DEFAULT_DEST = os.path.expanduser("~/Documents")      # single-file download dest
-UPRES_DEST   = os.path.expanduser("~/Documents")      # single-file enhanced output
-BATCH_DEST   = os.path.expanduser("~/Documents")      # batch channel download root
+DEFAULT_DEST = os.path.expanduser("~/Documents/outputs/original")   # single-file download dest
+UPRES_DEST   = os.path.expanduser("~/Documents/outputs/enhanced")   # single-file enhanced output
+BATCH_DEST   = os.path.expanduser("~/Documents/outputs/batches")    # batch channel download root
 
 # ── Upscale ladder ────────────────────────────────────────────────────────────
 UPSCALE_CEILING = 1440
