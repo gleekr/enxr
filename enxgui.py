@@ -17,6 +17,7 @@ from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier, _main_chain
 from config.settings import UPSCALE_CEILING, UPSCALE_STEPS
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
+from filters.presets import EnhancePreset, SECRET_FILTERS
 
 
 class Color:
@@ -168,6 +169,59 @@ def prompt_passes(skip_prompts: bool = False) -> int:
         print("  invalid, enter 1-4")
 
 
+def _prompt_secret_menu() -> tuple:
+    """Secret preset menu. Returns (None, user_filters list)."""
+    print(f"\n{Color.DIM}[secret menu]{Color.RESET}")
+    print("  a - raw unsharp (no deblock/deband)")
+    print("  b - dctdnoiz only")
+    print("  c - fftdnoiz only")
+    print("  d - deflicker only")
+    print("  e - custom filter string (advanced)")
+    while True:
+        choice = input(f"{Color.BOLD}:{Color.RESET} ").strip().lower()
+        if choice in ('a', 'b', 'c', 'd'):
+            return (None, list(SECRET_FILTERS[choice]))
+        if choice == 'e':
+            fstr = input(f"{Color.BOLD}filter string:{Color.RESET} ").strip()
+            if fstr:
+                return (None, [f.strip() for f in fstr.split(',')])
+            print("  enter a filter string")
+        else:
+            print("  enter a, b, c, d, or e")
+
+
+def prompt_preset(skip_prompts: bool = False) -> tuple:
+    """
+    Show named preset menu (multi-pass only).
+    Returns (EnhancePreset | None, user_filters | None).
+    """
+    if skip_prompts:
+        return (EnhancePreset.CLEAN, None)
+    preset_map = {
+        '1': EnhancePreset.CLEAN,
+        '2': EnhancePreset.RESTORE,
+        '3': EnhancePreset.SHARP,
+        '4': EnhancePreset.CINEMATIC,
+        '5': EnhancePreset.DEEP_CLEAN,
+        '6': EnhancePreset.STABILIZE,
+    }
+    print(f"\n{Color.BOLD}Enhancement preset:{Color.RESET}")
+    print("  1 - Clean       (deblock + deband, safe)")
+    print("  2 - Restore     (+ light denoise, typical YT)")
+    print("  3 - Sharp       (sharpening focus)")
+    print("  4 - Cinematic   (color + tone)")
+    print("  5 - Deep Clean  (max artifact removal, slow)")
+    print("  6 - Stabilize   (deshake + deflicker)")
+    print(f"  {Color.DIM}secret..        (type 'x'){Color.RESET}")
+    while True:
+        choice = input(f"{Color.BOLD}Preset:{Color.RESET} ").strip().lower()
+        if choice in preset_map:
+            return (preset_map[choice], None)
+        if choice in ('x', 'secret'):
+            return _prompt_secret_menu()
+        print("  invalid, enter 1-6 or 'x' for secret menu")
+
+
 def _parse_gui_args(args: list) -> tuple:
     path = None
     passes_override = None
@@ -223,11 +277,18 @@ def main() -> None:
 
         # Enhancement-only (high-res source): lock to source, 1 pass, no prompts
         if is_high_res:
-            target_res = short_side
-            passes     = 1
+            target_res    = short_side
+            passes        = 1
+            preset        = None
+            secret_filters = None
         else:
             target_res = prompt_target_res(options, skip_all_prompts)
             passes     = passes_override if passes_override else prompt_passes(skip_all_prompts)
+            if passes > 1:
+                preset, secret_filters = prompt_preset(skip_all_prompts)
+            else:
+                preset        = None
+                secret_filters = None
 
         # Render time estimate / calibration
         duration = get_duration(path)
@@ -250,7 +311,8 @@ def main() -> None:
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         t0  = time.time()
-        out = enhance(path, level=level, user_filters=None,
+        out = enhance(path, level=level, preset=preset,
+                      user_filters=secret_filters,
                       passes=passes, target_res=target_res,
                       ceiling=0 if is_high_res else None)
         elapsed = time.time() - t0

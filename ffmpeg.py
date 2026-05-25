@@ -21,7 +21,8 @@ from config.settings import (AUTO_DEFAULT_LEVEL, UPSCALE_CEILING, UPSCALE_STEPS,
                               SOURCE_CEILING, CEILING_MAX_PASSES)
 
 PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]  # index = pass number - 1
-from filters.presets import QualityTier, CLEANUP, MAIN
+from filters.presets import (QualityTier, CLEANUP, MAIN,
+                             EnhancePreset, PRESET_FILTERS, NO_DECAY_PRESETS)
 from logger import log_error, cleanup_tmp
 
 
@@ -122,13 +123,21 @@ def _apply_decay(filters: list, decay: float) -> list:
     """Scale numeric filter params by decay factor for refinement passes."""
     result = []
     for f in filters:
+        # unsharp luma amount
         f = re.sub(r'\bla=([\d.]+)',
                    lambda m: f"la={float(m.group(1)) * decay:.4f}", f)
+        # deblock alpha/beta/gamma/delta
         for p in ('alpha', 'beta', 'gamma', 'delta'):
             f = re.sub(rf'\b{p}=([\d.]+)',
                        lambda m, p=p: f"{p}={float(m.group(1)) * decay:.4f}", f)
+        # deband range (floor 8)
         f = re.sub(r'\brange=(\d+)',
                    lambda m: f"range={max(8, int(int(m.group(1)) * decay))}", f)
+        # cinematic: huesaturation saturation, vibrance intensity
+        f = re.sub(r'\bsaturation=([\d.]+)',
+                   lambda m: f"saturation={float(m.group(1)) * decay:.4f}", f)
+        f = re.sub(r'\bintensity=([\d.]+)',
+                   lambda m: f"intensity={float(m.group(1)) * decay:.4f}", f)
         result.append(f)
     return result
 
@@ -158,6 +167,23 @@ def _main_chain(tier: int, target: int, is_portrait: bool,
             filters.append(
                 f"zscale=w=-2:h={target}:filter=lanczos:dither=error_diffusion")
 
+    filters.append("format=yuv420p")
+    return ",".join(filters)
+
+
+def _preset_chain(preset: EnhancePreset, target: int, is_portrait: bool,
+                  do_upscale: bool, decay: float = 1.0) -> str:
+    """Build filter chain from a named EnhancePreset with optional decay."""
+    filters = list(PRESET_FILTERS[preset])
+    if decay < 1.0 and preset not in NO_DECAY_PRESETS:
+        filters = _apply_decay(filters, decay)
+    if do_upscale:
+        if is_portrait:
+            filters.append(
+                f"zscale=w={target}:h=-2:filter=lanczos:dither=error_diffusion")
+        else:
+            filters.append(
+                f"zscale=w=-2:h={target}:filter=lanczos:dither=error_diffusion")
     filters.append("format=yuv420p")
     return ",".join(filters)
 
@@ -346,7 +372,23 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
             pct = int(decay * 100)
             print(f"[ffmpeg] pass {i + 1}/{passes}: {eff_target}p refine ({pct}% strength)")
 
-        main_vf  = _main_chain(tier, eff_target, is_portrait, pass_up, user_filters, decay)
+        if passes > 1 and preset is not None:
+            main_vf = _preset_chain(preset, eff_target, is_portrait, pass_up, decay)
+        elif passes > 1 and user_filters is not None:
+            # secret menu: user_filters IS the whole chain body
+            sec_f = list(user_filters)
+            if decay < 1.0:
+                sec_f = _apply_decay(sec_f, decay)
+            if pass_up:
+                zf = (f"zscale=w={eff_target}:h=-2:filter=lanczos:dither=error_diffusion"
+                      if is_portrait else
+                      f"zscale=w=-2:h={eff_target}:filter=lanczos:dither=error_diffusion")
+                sec_f.append(zf)
+            sec_f.append("format=yuv420p")
+            main_vf = ",".join(sec_f)
+        else:
+            extra   = user_filters if passes == 1 else None
+            main_vf = _main_chain(tier, eff_target, is_portrait, pass_up, extra, decay)
         out_path = (os.path.join(final_dir, f"ex{name}.mp4") if is_last
                     else os.path.join(dirname, f"tmp_{name}_p{i + 1}.mp4"))
 
