@@ -7,7 +7,7 @@ Usage:
   python3 downloader.py <URL or file> [URL or file ...]
 """
 
-import os, sys, re, shutil, random, tempfile, threading
+import os, sys, re, shutil, random, tempfile, threading, glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import yt_dlp
 from urllib.parse import urlparse
@@ -36,10 +36,11 @@ _DL_BASE = {
 
 def _rand_id(dest: str) -> str:
     """Collision-safe 4-digit ID that doesn't already exist at dest."""
-    while True:
+    for _ in range(10000):
         file_id = f"{random.randint(0, 9999):04d}"
         if not os.path.exists(os.path.join(dest, f"{file_id}.mp4")):
             return file_id
+    raise RuntimeError(f"no free 4-digit slot in {dest}")
 
 
 def _yt_opts(dest: str, file_id: str) -> dict:
@@ -114,7 +115,11 @@ def download(source: str, dest: str = DEFAULT_DEST) -> str:
         file_id = _rand_id(dest)
         with yt_dlp.YoutubeDL(_yt_opts(dest, file_id)) as ydl:
             ydl.download([source])
-        return os.path.join(dest, f"{file_id}.mp4")
+        candidates = glob.glob(os.path.join(dest, f"{file_id}.*"))
+        mp4 = next((c for c in candidates if c.lower().endswith(".mp4")), None)
+        if not mp4:
+            raise FileNotFoundError(f"yt-dlp produced no .mp4 output for id {file_id}")
+        return mp4
     else:
         return _copy_file(source, dest)
 
@@ -154,8 +159,9 @@ def download_batch(url: str, dest: str = BATCH_DEST,
 
     def _dl_one(entry, idx):
         vid_id    = entry.get("id", "")
-        entry_url = (f"https://www.youtube.com/watch?v={vid_id}"
-                     if vid_id else entry.get("url", ""))
+        entry_url = (entry.get("webpage_url")
+                     or entry.get("url")
+                     or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""))
         if not entry_url:
             return None
         opts = {
@@ -168,12 +174,13 @@ def download_batch(url: str, dest: str = BATCH_DEST,
         try:
             with yt_dlp.YoutubeDL(opts) as ydl:
                 ydl.extract_info(entry_url, download=True)
-            fname = os.path.join(tmp_dir, f"{vid_id}.mp4")
-            if os.path.exists(fname):
+            candidates = glob.glob(os.path.join(tmp_dir, f"{vid_id}.*"))
+            mp4 = next((c for c in candidates if c.lower().endswith(".mp4")), None)
+            if mp4:
                 with lock:
                     counter[0] += 1
                     print(f"  [{counter[0]}/{total}] {vid_id}")
-                return fname
+                return mp4
         except Exception as e:
             print(f"  [!] {idx}/{total} failed: {e}")
             return None
