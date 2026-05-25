@@ -9,6 +9,7 @@ Usage:
 
 import os, sys, re, shutil, random, tempfile, threading, glob
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Any, Optional
 import yt_dlp
 from urllib.parse import urlparse
 
@@ -18,7 +19,7 @@ from config.settings import DEFAULT_DEST, BATCH_DEST, BATCH_WORKERS, BATCH_FRAGM
 # ── Shared download settings ──────────────────────────────────────────────────
 # Single source of truth -- _yt_opts and batch _dl_one both extend this.
 # Changes here apply everywhere.
-_DL_BASE = {
+_DL_BASE: dict[str, Any] = {
     "format":                        "bestvideo+bestaudio/best",
     "merge_output_format":           "mp4",
     "concurrent_fragment_downloads": 16,
@@ -30,6 +31,10 @@ _DL_BASE = {
     "socket_timeout":                30,
     "noplaylist":                    True,           # safety -- callers set False when needed
 }
+
+_HANDLE_RE  = re.compile(r'/@([^/?#]+)')
+_CHANNEL_RE = re.compile(r'/(?:channel|c)/([^/?#]+)')
+_SLUG_CLEAN = re.compile(r'[^\w\-]')
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -43,7 +48,7 @@ def _rand_id(dest: str) -> str:
     raise RuntimeError(f"no free 4-digit slot in {dest}")
 
 
-def _yt_opts(dest: str, file_id: str) -> dict:
+def _yt_opts(dest: str, file_id: str) -> dict[str, Any]:
     return {
         **_DL_BASE,
         "outtmpl":     os.path.join(dest, f"{file_id}.%(ext)s"),
@@ -56,11 +61,11 @@ def _is_url(s: str) -> bool:
     return s.startswith(("http://", "https://", "ftp://"))
 
 
-def _detect_playlist(url: str) -> tuple:
-    """Flat probe -- returns (is_playlist: bool, count: int).
+def _detect_playlist(url: str) -> tuple[bool, int]:
+    """Flat probe -- returns (is_playlist, count).
     Fast: no download, just metadata. Returns (False, 0) on any error."""
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "noplaylist": False}) as ydl:
+        with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "noplaylist": False}) as ydl:  # type: ignore[arg-type]
             info = ydl.extract_info(url, download=False)
         entries = info.get("entries")
         return (True, len(entries)) if entries else (False, 1)
@@ -92,14 +97,14 @@ def _copy_file(src: str, dest_dir: str) -> str:
 
 def _channel_name_from_url(url: str) -> str:
     """Filesystem-safe channel name from a YouTube channel/playlist URL."""
-    m = re.search(r'/@([^/?#]+)', url)
+    m = _HANDLE_RE.search(url)
     if m:
         return m.group(1)
-    m = re.search(r'/(?:channel|c)/([^/?#]+)', url)
+    m = _CHANNEL_RE.search(url)
     if m:
         return m.group(1)
     slug = urlparse(url).path.strip('/').replace('/', '_')
-    return re.sub(r'[^\w\-]', '_', slug) or 'batch'
+    return _SLUG_CLEAN.sub('_', slug) or 'batch'
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -113,7 +118,7 @@ def download(source: str, dest: str = DEFAULT_DEST) -> str:
 
     if _is_url(source):
         file_id = _rand_id(dest)
-        with yt_dlp.YoutubeDL(_yt_opts(dest, file_id)) as ydl:
+        with yt_dlp.YoutubeDL(_yt_opts(dest, file_id)) as ydl:  # type: ignore[arg-type]
             ydl.download([source])
         candidates = glob.glob(os.path.join(dest, f"{file_id}.*"))
         mp4 = next((c for c in candidates if c.lower().endswith(".mp4")), None)
@@ -125,7 +130,7 @@ def download(source: str, dest: str = DEFAULT_DEST) -> str:
 
 
 def download_batch(url: str, dest: str = BATCH_DEST,
-                   playlist_items: str = None) -> tuple:
+                   playlist_items: Optional[str] = None) -> tuple[list[str], str]:
     """
     Download videos from a playlist or channel URL.
     Originals land in dest/<channel>/noenx/.
@@ -144,10 +149,10 @@ def download_batch(url: str, dest: str = BATCH_DEST,
 
     # Flat probe respecting playlist_items filter so count is accurate
     print("[batch] fetching playlist...")
-    flat_opts = {"quiet": True, "extract_flat": True, "noplaylist": False}
+    flat_opts: dict[str, Any] = {"quiet": True, "extract_flat": True, "noplaylist": False}
     if playlist_items:
         flat_opts["playlist_items"] = playlist_items
-    with yt_dlp.YoutubeDL(flat_opts) as ydl:
+    with yt_dlp.YoutubeDL(flat_opts) as ydl:  # type: ignore[arg-type]
         info    = ydl.extract_info(url, download=False)
     entries = info.get("entries") or [info]
     total   = len(entries)
@@ -157,14 +162,14 @@ def download_batch(url: str, dest: str = BATCH_DEST,
     counter = [0]
     lock    = threading.Lock()
 
-    def _dl_one(entry, idx):
+    def _dl_one(entry: Any, idx: int) -> Optional[str]:
         vid_id    = entry.get("id", "")
         entry_url = (entry.get("webpage_url")
                      or entry.get("url")
                      or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""))
         if not entry_url:
             return None
-        opts = {
+        opts: dict[str, Any] = {
             **_DL_BASE,
             "outtmpl":                       os.path.join(tmp_dir, "%(id)s.%(ext)s"),
             "concurrent_fragment_downloads": BATCH_FRAGMENT_THREADS,
@@ -172,7 +177,7 @@ def download_batch(url: str, dest: str = BATCH_DEST,
             "no_warnings":                   True,
         }
         try:
-            with yt_dlp.YoutubeDL(opts) as ydl:
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
                 ydl.extract_info(entry_url, download=True)
             candidates = glob.glob(os.path.join(tmp_dir, f"{vid_id}.*"))
             mp4 = next((c for c in candidates if c.lower().endswith(".mp4")), None)
@@ -183,10 +188,10 @@ def download_batch(url: str, dest: str = BATCH_DEST,
                 return mp4
         except Exception as e:
             print(f"  [!] {idx}/{total} failed: {e}")
-            return None
+        return None
 
     try:
-        tmp_files = []
+        tmp_files: list[str] = []
         with ThreadPoolExecutor(max_workers=BATCH_WORKERS) as executor:
             futures = {executor.submit(_dl_one, e, i + 1): i
                        for i, e in enumerate(entries)}
@@ -195,7 +200,7 @@ def download_batch(url: str, dest: str = BATCH_DEST,
                 if result:
                     tmp_files.append(result)
 
-        downloaded = []
+        downloaded: list[str] = []
         for tmp_path in sorted(tmp_files):
             file_id  = _rand_id(noenx_dir)
             out_path = os.path.join(noenx_dir, f"{file_id}.mp4")
