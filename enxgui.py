@@ -31,6 +31,13 @@ class Color:
     RESET  = '\033[0m'
 
 
+def _rl_safe(s: str) -> str:
+    """Wrap ANSI escapes so readline counts cursor width correctly."""
+    if os.name == 'nt':
+        return s
+    return re.sub(r'(\033\[[0-9;]*m)', r'\001\1\002', s)
+
+
 def _check_terminal_context() -> dict:
     flags = {'skip_prompts': False, 'auto_mode': False}
     if os.environ.get('SKIP_PROMPTS') == '1' or os.environ.get('SKIP') == 'true':
@@ -98,7 +105,7 @@ def prompt_upscale(skip_prompts: bool = False, is_high_res: bool = False) -> boo
     if is_high_res:
         _print_why_skip(UPSCALE_CEILING)
         while True:
-            choice = input(f"\n{Color.BOLD}Enhancement only? (y/n):{Color.RESET} ").strip().lower()
+            choice = input(_rl_safe(f"\n{Color.BOLD}Enhancement only? (y/n):{Color.RESET} ")).strip().lower()
             if choice in ('y', 'n'):
                 return choice == 'y'
             print("  invalid, enter y or n")
@@ -128,7 +135,7 @@ def prompt_level(skip_prompts: bool = False) -> int:
     print("  0    - skip enhancement")
 
     while True:
-        choice = input(f"{Color.BOLD}Tier:{Color.RESET} ").strip()
+        choice = input(_rl_safe(f"{Color.BOLD}Tier:{Color.RESET} ")).strip()
         if choice == "":
             return None
         if choice in ("0", "1", "2", "3", "4", "5"):
@@ -147,7 +154,7 @@ def prompt_target_res(options: list, skip_prompts: bool = False) -> int:
         print(f"  {i + 1} - {opt['label']}{star}")
     while True:
         choice = input(
-            f"{Color.BOLD}Target (1-{len(options)}, enter for {recommended}p):{Color.RESET} "
+            _rl_safe(f"{Color.BOLD}Target (1-{len(options)}, enter for {recommended}p):{Color.RESET} ")
         ).strip()
         if choice == "":
             return recommended
@@ -163,7 +170,7 @@ def prompt_passes(skip_prompts: bool = False) -> int:
     print("  1 = single enhancement")
     print("  2+ = refinement passes (strength auto-reduces each pass)")
     while True:
-        choice = input(f"{Color.BOLD}Passes (1-4):{Color.RESET} ").strip()
+        choice = input(_rl_safe(f"{Color.BOLD}Passes (1-4):{Color.RESET} ")).strip()
         if choice.isdigit() and 1 <= int(choice) <= 4:
             return int(choice)
         print("  invalid, enter 1-4")
@@ -178,11 +185,11 @@ def _prompt_secret_menu() -> tuple:
     print("  d - deflicker only")
     print("  e - custom filter string (advanced)")
     while True:
-        choice = input(f"{Color.BOLD}:{Color.RESET} ").strip().lower()
+        choice = input(_rl_safe(f"{Color.BOLD}:{Color.RESET} ")).strip().lower()
         if choice in ('a', 'b', 'c', 'd'):
             return (None, list(SECRET_FILTERS[choice]))
         if choice == 'e':
-            fstr = input(f"{Color.BOLD}filter string:{Color.RESET} ").strip()
+            fstr = input(_rl_safe(f"{Color.BOLD}filter string:{Color.RESET} ")).strip()
             if fstr:
                 return (None, [f.strip() for f in fstr.split(',')])
             print("  enter a filter string")
@@ -214,7 +221,7 @@ def prompt_preset(skip_prompts: bool = False) -> tuple:
     print("  6 - Stabilize   (deshake + deflicker)")
     print(f"  {Color.DIM}secret..        (type 'x'){Color.RESET}")
     while True:
-        choice = input(f"{Color.BOLD}Preset:{Color.RESET} ").strip().lower()
+        choice = input(_rl_safe(f"{Color.BOLD}Preset:{Color.RESET} ")).strip().lower()
         if choice in preset_map:
             return (preset_map[choice], None)
         if choice in ('x', 'secret'):

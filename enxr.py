@@ -19,7 +19,7 @@ Examples:
   SKIP_PROMPTS=1 python3 enxr.py ~/Downloads/video.mp4
 """
 
-import os, sys
+import os, sys, re as _re
 
 import time
 
@@ -43,9 +43,16 @@ class Color:
     RESET = '\033[0m'
 
 
+def _rl_safe(s: str) -> str:
+    """Wrap ANSI escapes so readline counts cursor width correctly."""
+    if os.name == 'nt':
+        return s
+    return _re.sub(r'(\033\[[0-9;]*m)', r'\001\1\002', s)
+
+
 def _input(prompt: str) -> str:
     """input() wrapper -- type 'exit', 'quit', or 'q' at any prompt to quit."""
-    val = input(prompt).strip()
+    val = input(_rl_safe(prompt)).strip()
     if val.lower() in ('exit', 'quit', 'q'):
         print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
         sys.exit(0)
@@ -89,23 +96,31 @@ def prompt_choice() -> str:
 
 def prompt_url() -> str:
     """Get URL from user."""
-    url = _input(f"{Color.BOLD}Paste URL:{Color.RESET} ")
-    if not url.startswith(('http://', 'https://', 'ftp://')):
+    while True:
+        url = _input(f"{Color.BOLD}Paste URL:{Color.RESET} ")
+        if url.startswith(('http://', 'https://', 'ftp://')):
+            return url
         print(f"  {Color.RED}invalid URL{Color.RESET}")
-        return prompt_url()
-    return url
 
 
 def prompt_file(prompt_text: str = "Enter file path") -> str:
     """Get file path from user."""
-    path = _input(f"{Color.BOLD}{prompt_text}:{Color.RESET} ")
-    path = os.path.abspath(os.path.expanduser(path))
-
-    if not os.path.isfile(path):
+    while True:
+        path = _input(f"{Color.BOLD}{prompt_text}:{Color.RESET} ")
+        path = os.path.abspath(os.path.expanduser(path))
+        if os.path.isfile(path):
+            return path
         print(f"  {Color.RED}file not found: {path}{Color.RESET}")
-        return prompt_file(prompt_text)
 
-    return path
+
+def prompt_folder(prompt_text: str = "Enter folder path") -> str:
+    """Get directory path from user."""
+    while True:
+        path = _input(f"{Color.BOLD}{prompt_text}:{Color.RESET} ")
+        path = os.path.abspath(os.path.expanduser(path))
+        if os.path.isdir(path):
+            return path
+        print(f"  {Color.RED}folder not found: {path}{Color.RESET}")
 
 
 def prompt_passes(skip: bool = False) -> int:
@@ -215,7 +230,7 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
 
         # Render time estimate / calibration
         duration = get_duration(file_path)
-        tier_for_cal = enxgui._detect_tier(file_path, w, h)
+        tier_for_cal = max(1, min(5, level if level else enxgui._detect_tier(file_path, w, h)))
         cal     = load_calibration()
         cal_key = str(target_res)
         if cal_key not in cal:
@@ -257,10 +272,7 @@ def action_batch_folder(skip_prompts: bool = False):
     """Action 5: Batch process folder"""
     print(f"\n{Color.BOLD}[ACTION 5] Batch Process Folder{Color.RESET}")
 
-    folder = prompt_file("Enter folder path")
-    if not os.path.isdir(folder):
-        print(f"{Color.RED}Not a folder{Color.RESET}")
-        return
+    folder = prompt_folder("Enter folder path")
 
     mp4_files = [f for f in os.listdir(folder) if f.lower().endswith('.mp4')]
 
@@ -378,7 +390,7 @@ def action_channel_shorts(skip_prompts: bool = False):
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
             out = enhance(file_path, level=2, user_filters=None, passes=passes,
-                          ceiling=ceiling, out_dir=upres_dir)
+                          ceiling=ceiling, out_dir=upres_dir, keep_original=True)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
             success += 1
         except Exception as e:
@@ -405,7 +417,15 @@ def main():
 
         if file_or_url.startswith(('http://', 'https://', 'ftp://')):
             print(f"{Color.BOLD}Processing URL...{Color.RESET}")
-            action_download_enhance(skip_prompts)
+            print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
+            try:
+                video_file = download(file_or_url, DEFAULT_DEST)
+                print(f"{Color.GREEN}* Downloaded:{Color.RESET} {video_file}")
+            except Exception as e:
+                log_error("download", e, extra=f"url={file_or_url}")
+                print(f"{Color.RED}Download failed: {e}{Color.RESET}")
+                return
+            action_enhance_file(video_file, skip_prompts)
         else:
             file_path = os.path.abspath(os.path.expanduser(file_or_url))
             if os.path.isfile(file_path):

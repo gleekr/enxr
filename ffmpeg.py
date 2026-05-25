@@ -203,7 +203,7 @@ def _file_valid(path: str) -> bool:
         return False
 
 
-def _try_encode(cmd: list) -> tuple:
+def _try_encode(cmd: list, tmp_path: str) -> tuple:
     """
     Attempt an ffmpeg encode. Returns (True, '') on success, (False, stderr) on failure.
 
@@ -216,7 +216,6 @@ def _try_encode(cmd: list) -> tuple:
         subprocess.run(cmd, check=True, capture_output=True, text=True)
         return True, ""
     except subprocess.CalledProcessError as e:
-        tmp_path = cmd[-1]
         if os.path.isfile(tmp_path):
             time.sleep(0.5)  # let filesystem settle before ffprobe reads
             size = os.path.getsize(tmp_path)
@@ -259,18 +258,18 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
         "-hwaccel", "none",
         "-i", path,
         "-map", "0:v:0",
-        "-map", "0:a:0",
+        "-map", "0:a:0?",
         "-c:a", "aac",
         "-vf", vf,
         "-map_metadata", "-1",
     ]
 
-    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path])
+    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path], tmp_path)
     if ok:
         return
     log_error("h264_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
-    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox", tmp_path])
+    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox", tmp_path], tmp_path)
     if ok:
         print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
         return
@@ -286,7 +285,7 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
 
 def enhance(path: str, level: int = None, preset=None, user_filters: list = None,
             passes: int = 1, target_res: int = None, ceiling: int = None,
-            out_dir: str = None) -> str:
+            out_dir: str = None, keep_original: bool = False) -> str:
     """
     Restoration + upscale pipeline.
 
@@ -334,6 +333,7 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
             return path  # at/above ceiling with no explicit target, nothing to do
 
     do_upscale = eff_target > short_side
+    passes = cap_passes(passes, eff_target)
 
     # Auto-detect tier if no override given
     tier = level if level else _detect_tier(path, w, h)
@@ -410,8 +410,8 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
                 os.remove(current_path)
             return path
 
-    # Remove original after all passes succeed
-    if os.path.exists(path) and current_path != path:
+    # Remove original after all passes succeed (unless caller wants to keep it)
+    if not keep_original and os.path.exists(path) and current_path != path:
         os.remove(path)
 
     return current_path

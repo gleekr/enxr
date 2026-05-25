@@ -47,6 +47,7 @@ def run_calibration(path: str, vf: str, resolution: int) -> bool:
         "-ss", "0", "-t", str(_CAL_CLIP_SECS),
         "-i", path,
         "-map", "0:v:0",
+        "-map", "0:a:0?",
         "-c:a", "aac", "-vf", vf,
         "-map_metadata", "-1",
     ]
