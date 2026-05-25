@@ -123,21 +123,6 @@ def prompt_folder(prompt_text: str = "Enter folder path") -> str:
         print(f"  {Color.RED}folder not found: {path}{Color.RESET}")
 
 
-def prompt_passes(skip: bool = False) -> int:
-    """Get number of passes."""
-    if skip:
-        return 1
-
-    print(f"\n{Color.BOLD}Enhancement passes:{Color.RESET}")
-    print("  1 = single enhancement")
-    print("  2+ = refinement passes (strength auto-reduces each pass)")
-
-    while True:
-        choice = _input(f"{Color.BOLD}Passes (1-4):{Color.RESET} ")
-        if choice.isdigit() and 1 <= int(choice) <= 4:
-            return int(choice)
-        print(f"  {Color.RED}invalid, enter 1-4{Color.RESET}")
-
 
 def action_download_enhance(skip_prompts: bool = False):
     """Action 1: Download + Enhance"""
@@ -221,7 +206,7 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
             secret_filters = None
         else:
             target_res = enxgui.prompt_target_res(options, skip_prompts)
-            passes     = prompt_passes(skip_prompts)
+            passes     = enxgui.prompt_passes(skip_prompts)
             if passes > 1:
                 preset, secret_filters = enxgui.prompt_preset(skip_prompts)
             else:
