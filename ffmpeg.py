@@ -26,19 +26,20 @@ from logger import log_error, cleanup_tmp
 # ── dimension + step helpers ─────────────────────────────────────────────────
 
 def _get_dims(path: str) -> tuple:
-    """Returns (width, height, is_portrait, short_side)."""
+    """Returns (width, height, is_portrait, short_side, codec_name)."""
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height", "-of", "json", path],
+             "-show_entries", "stream=width,height,codec_name", "-of", "json", path],
             capture_output=True, text=True, check=True,
         )
         streams = json.loads(result.stdout).get("streams", [])
         if not streams:
             raise ValueError(f"no video stream found in: {path}")
-        w = int(streams[0]["width"])
-        h = int(streams[0]["height"])
-        return w, h, h > w, min(w, h)
+        w     = int(streams[0]["width"])
+        h     = int(streams[0]["height"])
+        codec = streams[0].get("codec_name", "unknown")
+        return w, h, h > w, min(w, h), codec
     except FileNotFoundError:
         raise FileNotFoundError("ffprobe not found -- is FFmpeg installed and on PATH?")
 
@@ -155,23 +156,25 @@ def _ffmpeg_errors(stderr: str) -> str:
     """Extract meaningful lines from ffmpeg stderr -- skips progress/info noise."""
     if not stderr.strip():
         return "encode failed (no output)"
-    keywords = ("error", "failed", "invalid", "unknown", "not found", "videotoolbox", "cannot")
+    keywords = ("error", "failed", "invalid", "unknown", "not found", "cannot")
     lines = stderr.strip().splitlines()
+    # strip build config line -- videotoolbox keyword was matching this, not real errors
+    lines = [l for l in lines if not l.strip().startswith("configuration:")]
     relevant = [l.strip() for l in lines if any(k in l.lower() for k in keywords)]
-    return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() or "encode failed")
+    return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() if lines else "encode failed")
 
 
 def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> None:
     """
     Encode with h264_videotoolbox (hardware H.264) first.
     Falls back to hevc_videotoolbox (hardware H.265) if H.264 VT fails.
-    Falls back to libx264 (software, Windows/Linux) if both VT encoders fail.
+    Raises RuntimeError if both fail -- libx264 is GPL and compiled out
+    of the iOS ffmpeg build, so no software fallback is available.
     -hwaccel none forces software decode -- required for AV1/non-native codecs.
     Audio always aac. Metadata always stripped.
 
-    high_quality: True for intermediate cleanup pass -- minimises generation
-    loss before the main pass runs. VideoToolbox uses -q:v 85 (out of 100);
-    libx264 uses -crf 18 (near-lossless). Final passes use encoder defaults.
+    high_quality param retained for API compatibility but VTB does not
+    support -q:v mode -- quality flags dropped to avoid -22 Invalid argument.
     """
     base_args = [
         "ffmpeg", "-y",
@@ -184,24 +187,21 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
         "-map_metadata", "-1",
     ]
 
-    vt_q   = ["-q:v", "85"] if high_quality else []
-    x264_q = ["-crf", "18"] if high_quality else []
-
-    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox"] + vt_q + [tmp_path])
+    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path])
     if ok:
         return
     log_error("h264_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
-    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox"] + vt_q + [tmp_path])
+    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox", tmp_path])
     if ok:
         print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
         return
     log_error("hevc_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
-    print("[ffmpeg] VideoToolbox unavailable, falling back to libx264")
-    ok, err = _try_encode(base_args + ["-c:v", "libx264"] + x264_q + [tmp_path])
-    if not ok:
-        raise RuntimeError(f"libx264 fallback failed: {_ffmpeg_errors(err)}")
+    raise RuntimeError(
+        "no compatible encoder found -- "
+        "h264_videotoolbox and hevc_videotoolbox both failed"
+    )
 
 
 # ── main enhance loop ─────────────────────────────────────────────────────────
@@ -225,7 +225,9 @@ def enhance(path: str, level: int = None, user_filters: list = None,
     if not os.path.isfile(path):
         raise FileNotFoundError(f"file not found: {path}")
 
-    w, h, is_portrait, short_side = _get_dims(path)
+    w, h, is_portrait, short_side, codec = _get_dims(path)
+    if codec == "av1":
+        print("[warn] AV1 source detected -- software decode required, processing will be slow")
     dirname   = os.path.dirname(path)
     name      = os.path.splitext(os.path.basename(path))[0]
     final_dir = out_dir if out_dir else dirname

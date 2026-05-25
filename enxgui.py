@@ -179,7 +179,7 @@ def main() -> None:
     skip_all_prompts = skip_prompts_flag or context['skip_prompts']
 
     try:
-        w, h, is_portrait, short_side = _get_dims(path)
+        w, h, is_portrait, short_side, codec = _get_dims(path)
         tier    = _detect_tier(path, w, h)
         options = _calculate_upscale_options(short_side, is_portrait)
 
@@ -206,7 +206,8 @@ def main() -> None:
             else:
                 print(f"\n  {Color.DIM}Ceiling: {ceiling}p  |  Max passes: {max_p}{Color.RESET}")
 
-        passes = passes_override if passes_override else prompt_passes(skip_all_prompts)
+        # Enhancement-only mode: always 1 pass, no prompt
+        passes = 1 if is_high_res else (passes_override if passes_override else prompt_passes(skip_all_prompts))
         passes = cap_passes(passes, ceiling)
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")

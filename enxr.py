@@ -24,7 +24,7 @@ import os, sys
 from downloader import download, download_batch, DEFAULT_DEST
 from ffmpeg import _get_dims, get_ceiling
 from logger import log_error
-from config.settings import UPRES_DEST, BATCH_DEST
+from config.settings import UPRES_DEST, BATCH_DEST, UPSCALE_CEILING
 import enxgui
 
 
@@ -173,7 +173,7 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
     print(f"\n{Color.YELLOW}Analyzing...{Color.RESET}")
 
     try:
-        w, h, is_portrait, short_side = _get_dims(file_path)
+        w, h, is_portrait, short_side, codec = _get_dims(file_path)
         orientation = "portrait" if is_portrait else "landscape"
 
         print(f"{Color.GREEN}* Resolution:{Color.RESET} {w}x{h} ({orientation})")
@@ -181,8 +181,10 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
         options = enxgui._calculate_upscale_options(short_side, is_portrait)
         enxgui._print_streams_detected(w, h, short_side, is_portrait, options)
 
-        ceiling     = get_ceiling(short_side)
-        is_high_res = (ceiling == 0)
+        # Fix: derive is_high_res from source, not from ceiling return value
+        is_high_res = (short_side >= UPSCALE_CEILING)
+        ceiling     = 0 if is_high_res else get_ceiling(short_side)
+
         should_upscale = enxgui.prompt_upscale(skip_prompts, is_high_res)
 
         if not should_upscale:
@@ -194,7 +196,8 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
             print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
             return
 
-        passes = prompt_passes(skip_prompts)
+        # Enhancement-only mode: always 1 pass, no prompt
+        passes = 1 if is_high_res else prompt_passes(skip_prompts)
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         from ffmpeg import enhance
@@ -241,7 +244,7 @@ def action_batch_folder(skip_prompts: bool = False):
 
         try:
             from ffmpeg import enhance
-            _, _, _, short_side = _get_dims(file_path)
+            _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
 
             out = enhance(file_path, level=2, user_filters=None, passes=passes, ceiling=ceiling)
@@ -331,7 +334,7 @@ def action_channel_shorts(skip_prompts: bool = False):
         print(f"{Color.CYAN}Processing: {filename}{Color.RESET}")
         try:
             from ffmpeg import enhance
-            _, _, _, short_side = _get_dims(file_path)
+            _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
             out = enhance(file_path, level=2, user_filters=None, passes=passes,
                           ceiling=ceiling, out_dir=upres_dir)
