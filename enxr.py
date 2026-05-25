@@ -21,10 +21,15 @@ Examples:
 
 import os, sys
 
+import time
+
 from downloader import download, download_batch, DEFAULT_DEST
-from ffmpeg import _get_dims, get_ceiling
+from ffmpeg import _get_dims, get_ceiling, enhance
 from logger import log_error
 from config.settings import UPRES_DEST, BATCH_DEST, UPSCALE_CEILING
+from calibration import (load_calibration, run_calibration, estimate_time,
+                         update_calibration, get_duration)
+from ffmpeg import _main_chain
 import enxgui
 
 
@@ -196,17 +201,50 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
 
         # Enhancement-only (high-res source): lock to source, 1 pass, no prompts
         if is_high_res:
-            target_res = short_side
-            passes     = 1
+            target_res     = short_side
+            passes         = 1
+            preset         = None
+            secret_filters = None
         else:
             target_res = enxgui.prompt_target_res(options, skip_prompts)
             passes     = prompt_passes(skip_prompts)
+            if passes > 1:
+                preset, secret_filters = enxgui.prompt_preset(skip_prompts)
+            else:
+                preset         = None
+                secret_filters = None
+
+        # Render time estimate / calibration
+        duration = get_duration(file_path)
+        tier_for_cal = enxgui._detect_tier(file_path, w, h)
+        cal     = load_calibration()
+        cal_key = str(target_res)
+        if cal_key not in cal:
+            print(f"\n  {Color.DIM}[first run] calibrating encoder speed...{Color.RESET}")
+            try:
+                cal_vf = _main_chain(tier_for_cal, target_res, is_portrait,
+                                     target_res > short_side)
+                run_calibration(file_path, cal_vf, target_res)
+                cal = load_calibration()
+            except Exception:
+                pass
+        if cal_key in cal and duration > 0:
+            est = estimate_time(duration, passes, target_res, cal)
+            if est:
+                label = f"{passes} pass{'es' if passes > 1 else ''} at {target_res}p"
+                print(f"  {Color.DIM}Estimated time: {est}  ({label}){Color.RESET}")
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
-        from ffmpeg import enhance
-        out = enhance(file_path, level=level, user_filters=None, passes=passes,
-                      target_res=target_res, ceiling=0 if is_high_res else None,
-                      out_dir=UPRES_DEST)
+        t0  = time.time()
+        out = enhance(file_path, level=level, preset=preset,
+                      user_filters=secret_filters,
+                      passes=passes, target_res=target_res,
+                      ceiling=0 if is_high_res else None, out_dir=UPRES_DEST)
+        elapsed = time.time() - t0
+        try:
+            update_calibration(target_res, elapsed, duration)
+        except Exception:
+            pass
 
         print(f"\n{Color.GREEN}* Complete!{Color.RESET} {out}")
 
