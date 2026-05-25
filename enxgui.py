@@ -11,8 +11,8 @@ Usage:
 
 import os, sys, re
 
-from ffmpeg import enhance, _get_dims, _get_steps, get_ceiling, cap_passes, _detect_tier
-from config.settings import UPSCALE_CEILING, UPSCALE_STEPS, CEILING_MAX_PASSES
+from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier
+from config.settings import UPSCALE_CEILING, UPSCALE_STEPS
 
 
 class Color:
@@ -131,12 +131,32 @@ def prompt_level(skip_prompts: bool = False) -> int:
         print("  invalid, enter 0-5 or press enter for auto")
 
 
+def prompt_target_res(options: list, skip_prompts: bool = False) -> int:
+    """Prompt user to pick target resolution. Returns target resolution integer."""
+    if skip_prompts:
+        return options[-1]['target']
+    recommended = options[-1]['target']
+    print(f"\n{Color.BOLD}Target resolution:{Color.RESET}")
+    for i, opt in enumerate(options):
+        star = f"  {Color.DIM}(recommended){Color.RESET}" if opt['target'] == recommended else ""
+        print(f"  {i + 1} - {opt['label']}{star}")
+    while True:
+        choice = input(
+            f"{Color.BOLD}Target (1-{len(options)}, enter for {recommended}p):{Color.RESET} "
+        ).strip()
+        if choice == "":
+            return recommended
+        if choice.isdigit() and 1 <= int(choice) <= len(options):
+            return options[int(choice) - 1]['target']
+        print(f"  invalid, enter 1-{len(options)} or press enter")
+
+
 def prompt_passes(skip_prompts: bool = False) -> int:
     if skip_prompts:
         return 1
     print(f"\n{Color.BOLD}Number of passes:{Color.RESET}")
-    print("  1 = cleanup + single upscale")
-    print("  2+ = cleanup + multi-step upscale")
+    print("  1 = single enhancement")
+    print("  2+ = refinement passes (strength auto-reduces each pass)")
     while True:
         choice = input(f"{Color.BOLD}Passes (1-4):{Color.RESET} ").strip()
         if choice.isdigit() and 1 <= int(choice) <= 4:
@@ -197,22 +217,18 @@ def main() -> None:
             print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
             sys.exit(0)
 
-        ceiling  = 0 if is_high_res else get_ceiling(short_side)
-        max_p    = CEILING_MAX_PASSES.get(ceiling, 2)
-
-        if not skip_all_prompts:
-            if ceiling == 0:
-                print(f"\n  {Color.DIM}Ceiling: source lock (enhance only){Color.RESET}")
-            else:
-                print(f"\n  {Color.DIM}Ceiling: {ceiling}p  |  Max passes: {max_p}{Color.RESET}")
-
-        # Enhancement-only mode: always 1 pass, no prompt
-        passes = 1 if is_high_res else (passes_override if passes_override else prompt_passes(skip_all_prompts))
-        passes = cap_passes(passes, ceiling)
+        # Enhancement-only (high-res source): lock to source, 1 pass, no prompts
+        if is_high_res:
+            target_res = short_side
+            passes     = 1
+        else:
+            target_res = prompt_target_res(options, skip_all_prompts)
+            passes     = passes_override if passes_override else prompt_passes(skip_all_prompts)
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         out = enhance(path, level=level, user_filters=None,
-                      passes=passes, ceiling=ceiling)
+                      passes=passes, target_res=target_res,
+                      ceiling=0 if is_high_res else None)
         print(f"\n{Color.GREEN}* Done!{Color.RESET} {out}")
 
     except Exception as e:

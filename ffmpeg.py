@@ -15,10 +15,10 @@ Usage:
                                [--720|--1080|--1440|--source]
 """
 
-import os, sys, subprocess, json
+import os, sys, subprocess, json, re
 
 from config.settings import (AUTO_DEFAULT_LEVEL, UPSCALE_CEILING, UPSCALE_STEPS,
-                              SOURCE_CEILING, CEILING_MAX_PASSES)
+                              SOURCE_CEILING, CEILING_MAX_PASSES, PASS_STRENGTH_DECAY)
 from filters.presets import QualityTier, CLEANUP, MAIN
 from logger import log_error, cleanup_tmp
 
@@ -116,15 +116,34 @@ def _cleanup_chain(tier: int) -> str:
     return ",".join(filters)
 
 
+def _apply_decay(filters: list, decay: float) -> list:
+    """Scale numeric filter params by decay factor for refinement passes."""
+    result = []
+    for f in filters:
+        f = re.sub(r'\bla=([\d.]+)',
+                   lambda m: f"la={float(m.group(1)) * decay:.4f}", f)
+        for p in ('alpha', 'beta', 'gamma', 'delta'):
+            f = re.sub(rf'\b{p}=([\d.]+)',
+                       lambda m, p=p: f"{p}={float(m.group(1)) * decay:.4f}", f)
+        f = re.sub(r'\brange=(\d+)',
+                   lambda m: f"range={max(8, int(int(m.group(1)) * decay))}", f)
+        result.append(f)
+    return result
+
+
 def _main_chain(tier: int, target: int, is_portrait: bool,
-                do_upscale: bool, user_filters=None) -> str:
+                do_upscale: bool, user_filters=None, decay: float = 1.0) -> str:
     """
     Table B: light repair + sharpen + optional upscale on cleaned signal.
     zscale uses lanczos + error diffusion for cleanest upscale quality.
     format=yuv420p at end is required by h264/h265_videotoolbox.
+    decay scales filter param intensity for refinement passes (pass 2+).
     """
     qt      = QualityTier(tier)
     filters = list(MAIN[qt])
+
+    if decay < 1.0:
+        filters = _apply_decay(filters, decay)
 
     if user_filters:
         filters.extend(user_filters)
@@ -206,18 +225,21 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
 
 # ── main enhance loop ─────────────────────────────────────────────────────────
 
-def enhance(path: str, level: int = None, user_filters: list = None,
-            passes: int = 1, ceiling: int = None, out_dir: str = None) -> str:
+def enhance(path: str, level: int = None, preset=None, user_filters: list = None,
+            passes: int = 1, target_res: int = None, ceiling: int = None,
+            out_dir: str = None) -> str:
     """
-    Two-pass restoration + upscale pipeline.
+    Restoration + upscale pipeline.
 
-    Pass A (cleanup): stabilize signal at source resolution using Table A preset.
-    Pass B (main):    sharpen + upscale using Table B preset, N times.
+    Pass A (cleanup): stabilize signal at source resolution.
+    Pass B (main):    sharpen + one-shot upscale to target_res, then N-1
+                      refinement passes at target_res with decaying strength.
 
-    level: quality tier override 1-5, or None for auto-detect.
-           0 = skip all processing.
-    ceiling: upscale cap. None=auto from source, 0=source lock.
-    out_dir: final output directory (defaults to same dir as input).
+    level:      quality tier override 1-5, None = auto-detect, 0 = skip.
+    preset:     EnhancePreset for multi-pass (Task 3, reserved).
+    target_res: explicit upscale target (e.g. 1440). None = derive from ceiling.
+    ceiling:    0 = source lock. None = auto from source. Otherwise cap.
+    out_dir:    final output directory (defaults to same dir as input).
 
     Returns output path on success, original path on skip/failure.
     """
@@ -238,24 +260,26 @@ def enhance(path: str, level: int = None, user_filters: list = None,
         return path
 
     is_high_res = (short_side >= UPSCALE_CEILING)
-    source_lock = (ceiling == 0)
 
-    if is_high_res and not source_lock:
-        return path
+    # Derive effective target resolution
+    if ceiling == 0:
+        eff_target = short_side
+    elif target_res is not None:
+        eff_target = target_res
+    elif ceiling is not None:
+        eff_target = ceiling
+    else:
+        auto_ceil  = get_ceiling(short_side)
+        eff_target = auto_ceil if auto_ceil > 0 else short_side
+        if is_high_res:
+            return path  # at/above ceiling with no explicit target, nothing to do
+
+    do_upscale = eff_target > short_side
 
     # Auto-detect tier if no override given
     tier = level if level else _detect_tier(path, w, h)
     tier = max(1, min(5, tier))
     print(f"[ffmpeg] quality tier {tier} ({QualityTier(tier).name.lower()})")
-
-    if source_lock:
-        step_list   = [short_side] * passes
-        do_upscales = [False] * passes
-    else:
-        step_list   = _get_steps(short_side, ceiling)
-        passes      = min(passes, len(step_list))
-        step_list   = step_list[:passes]
-        do_upscales = [True] * len(step_list)
 
     current_path   = path
     current_height = short_side
@@ -275,22 +299,21 @@ def enhance(path: str, level: int = None, user_filters: list = None,
         cleanup_tmp(dirname)
         return path
 
-    # ── Pass B: main passes (sharpen + upscale) ───────────────────────────────
-    for i, target in enumerate(step_list):
-        is_last  = (i == len(step_list) - 1)
-        do_up    = do_upscales[i]
+    # ── Pass B: N passes at target_res, upscale on pass 1 only ───────────────
+    for i in range(passes):
+        is_last   = (i == passes - 1)
+        pass_up   = do_upscale and (i == 0)
+        decay     = (PASS_STRENGTH_DECAY[i]
+                     if i < len(PASS_STRENGTH_DECAY)
+                     else PASS_STRENGTH_DECAY[-1])
 
-        if source_lock and i >= 2:
-            print(f"[warn] pass {i + 1} -- diminishing returns likely")
-
-        if do_up:
-            print(f"[ffmpeg] main {i + 1}/{len(step_list)}: "
-                  f"{current_height}p -> {target}p")
+        if pass_up:
+            print(f"[ffmpeg] pass {i + 1}/{passes}: {current_height}p -> {eff_target}p")
         else:
-            print(f"[ffmpeg] main {i + 1}/{len(step_list)}: "
-                  f"{current_height}p refine")
+            pct = int(decay * 100)
+            print(f"[ffmpeg] pass {i + 1}/{passes}: {eff_target}p refine ({pct}% strength)")
 
-        main_vf  = _main_chain(tier, target, is_portrait, do_up, user_filters)
+        main_vf  = _main_chain(tier, eff_target, is_portrait, pass_up, user_filters, decay)
         out_path = (os.path.join(final_dir, f"ex{name}.mp4") if is_last
                     else os.path.join(dirname, f"tmp_{name}_p{i + 1}.mp4"))
 
@@ -302,11 +325,11 @@ def enhance(path: str, level: int = None, user_filters: list = None,
                 os.remove(current_path)
 
             current_path   = out_path
-            current_height = target if do_up else current_height
+            current_height = eff_target if pass_up else current_height
 
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             log_error("enhance_main", e,
-                      extra=f"file={os.path.basename(path)} pass={i+1}")
+                      extra=f"file={os.path.basename(path)} pass={i + 1}")
             cleanup_tmp(dirname)
             if current_path != path and os.path.exists(current_path):
                 os.remove(current_path)
@@ -348,6 +371,7 @@ def _parse_args(args: list):
     user_filters = None
     passes       = 1
     auto         = False
+    target_res   = None
     ceiling      = None
 
     i = 0
@@ -363,13 +387,13 @@ def _parse_args(args: list):
             auto = True
             i += 1
         elif a == "--720":
-            ceiling = 720
+            target_res = 720
             i += 1
         elif a == "--1080":
-            ceiling = 1080
+            target_res = 1080
             i += 1
         elif a == "--1440":
-            ceiling = 1440
+            target_res = 1440
             i += 1
         elif a == "--source":
             ceiling = 0
@@ -386,7 +410,7 @@ def _parse_args(args: list):
     if auto and level is None:
         level = AUTO_DEFAULT_LEVEL
 
-    return path, level, user_filters, passes, ceiling
+    return path, level, user_filters, passes, target_res, ceiling
 
 
 def main() -> None:
@@ -395,14 +419,15 @@ def main() -> None:
         print(__doc__)
         sys.exit(0 if args else 1)
 
-    path, level, user_filters, passes, ceiling = _parse_args(args)
+    path, level, user_filters, passes, target_res, ceiling = _parse_args(args)
 
     if not path:
         print("error: no input file specified", file=sys.stderr)
         sys.exit(1)
 
     try:
-        out = enhance(path, level, user_filters, passes, ceiling)
+        out = enhance(path, level, user_filters=user_filters, passes=passes,
+                      target_res=target_res, ceiling=ceiling)
         print(f"[OK] {out}")
     except Exception as e:
         print(f"[!] {e}", file=sys.stderr)
