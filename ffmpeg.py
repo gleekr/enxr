@@ -142,13 +142,13 @@ def _main_chain(tier: int, target: int, is_portrait: bool,
 
 # ── encoder ───────────────────────────────────────────────────────────────────
 
-def _try_encode(cmd: list) -> bool:
-    """Attempt an ffmpeg encode. Returns True on success, False on failure."""
+def _try_encode(cmd: list) -> tuple:
+    """Attempt an ffmpeg encode. Returns (True, '') on success, (False, stderr) on failure."""
     try:
-        subprocess.run(cmd, check=True, capture_output=True)
-        return True
-    except subprocess.CalledProcessError:
-        return False
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+        return True, ""
+    except subprocess.CalledProcessError as e:
+        return False, e.stderr or ""
 
 
 def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> None:
@@ -177,12 +177,16 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
     vt_q   = ["-q:v", "85"] if high_quality else []
     x264_q = ["-crf", "18"] if high_quality else []
 
-    if _try_encode(base_args + ["-c:v", "h264_videotoolbox"] + vt_q + [tmp_path]):
+    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox"] + vt_q + [tmp_path])
+    if ok:
         return
+    log_error("h264_videotoolbox", RuntimeError(err.strip().splitlines()[-1] if err.strip() else "encode failed"))
 
-    if _try_encode(base_args + ["-c:v", "hevc_videotoolbox"] + vt_q + [tmp_path]):
+    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox"] + vt_q + [tmp_path])
+    if ok:
         print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
         return
+    log_error("hevc_videotoolbox", RuntimeError(err.strip().splitlines()[-1] if err.strip() else "encode failed"))
 
     print("[ffmpeg] VideoToolbox unavailable, falling back to libx264")
     subprocess.run(base_args + ["-c:v", "libx264"] + x264_q + [tmp_path], check=True)
