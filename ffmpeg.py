@@ -18,7 +18,7 @@ Usage:
 import os, sys, subprocess, json, re, time
 
 from config.settings import (AUTO_DEFAULT_LEVEL, UPSCALE_CEILING, UPSCALE_STEPS,
-                              SOURCE_CEILING, CEILING_MAX_PASSES)
+                              SOURCE_CEILING)
 
 PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]  # index = pass number - 1
 from filters.presets import (QualityTier, CLEANUP, MAIN,
@@ -65,14 +65,6 @@ def get_ceiling(short_side: int) -> int:
             return SOURCE_CEILING[threshold]
     return 720
 
-
-def cap_passes(passes: int, ceiling: int) -> int:
-    """Cap passes to quality/hardware limit for given ceiling."""
-    max_p = CEILING_MAX_PASSES.get(ceiling, 2)
-    if passes > max_p:
-        print(f"[warn] max {max_p} passes for {ceiling}p ceiling -- running {max_p}")
-        return max_p
-    return passes
 
 
 # ── quality detection ─────────────────────────────────────────────────────────
@@ -203,7 +195,7 @@ def _file_valid(path: str) -> bool:
         return False
 
 
-def _try_encode(cmd: list, tmp_path: str) -> tuple:
+def _try_encode(cmd: list, tmp_path: str, progress_cb=None) -> tuple:
     """
     Attempt an ffmpeg encode. Returns (True, '') on success, (False, stderr) on failure.
 
@@ -211,22 +203,49 @@ def _try_encode(cmd: list, tmp_path: str) -> tuple:
     sometimes AFTER encoding completes but during final container cleanup.
     If the process exits non-zero but the output file exists and is large/valid,
     treat as success rather than falling through to the next encoder.
+
+    progress_cb: optional callable(line: str) — receives each ffmpeg stderr line.
+    When set, uses Popen for streaming; otherwise uses subprocess.run (CLI path).
     """
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-        return True, ""
-    except subprocess.CalledProcessError as e:
+    if progress_cb is None:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return True, ""
+        except subprocess.CalledProcessError as e:
+            if os.path.isfile(tmp_path):
+                time.sleep(0.5)
+                size = os.path.getsize(tmp_path)
+                if size > 102400:
+                    if _file_valid(tmp_path):
+                        print("[ffmpeg] signal interrupt after encode -- output valid, continuing")
+                        return True, ""
+                    if size > 1024 * 1024:
+                        print(f"[ffmpeg] signal interrupt -- ffprobe inconclusive but file is {size // 1024}KB, treating as valid")
+                        return True, ""
+            return False, e.stderr or ""
+    else:
+        stderr_lines = []
+        try:
+            proc = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                    text=True)
+            for line in proc.stderr:
+                line = line.rstrip()
+                stderr_lines.append(line)
+                progress_cb(line)
+            proc.wait()
+        except Exception as e:
+            return False, str(e)
+        if proc.returncode == 0:
+            return True, ""
         if os.path.isfile(tmp_path):
-            time.sleep(0.5)  # let filesystem settle before ffprobe reads
+            time.sleep(0.5)
             size = os.path.getsize(tmp_path)
             if size > 102400:
                 if _file_valid(tmp_path):
-                    print("[ffmpeg] signal interrupt after encode -- output valid, continuing")
                     return True, ""
-                if size > 1024 * 1024:  # >1 MB -- almost certainly a complete encode
-                    print(f"[ffmpeg] signal interrupt -- ffprobe inconclusive but file is {size // 1024}KB, treating as valid")
+                if size > 1024 * 1024:
                     return True, ""
-        return False, e.stderr or ""
+        return False, "\n".join(stderr_lines[-20:])
 
 
 def _ffmpeg_errors(stderr: str) -> str:
@@ -241,7 +260,8 @@ def _ffmpeg_errors(stderr: str) -> str:
     return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() if lines else "encode failed")
 
 
-def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> None:
+def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False,
+            progress_cb=None) -> None:
     """
     Encode with h264_videotoolbox (hardware H.264) first.
     Falls back to hevc_videotoolbox (hardware H.265) if H.264 VT fails.
@@ -264,12 +284,14 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
         "-map_metadata", "-1",
     ]
 
-    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path], tmp_path)
+    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path], tmp_path,
+                          progress_cb)
     if ok:
         return
     log_error("h264_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
-    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox", tmp_path], tmp_path)
+    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox", tmp_path], tmp_path,
+                          progress_cb)
     if ok:
         print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
         return
@@ -285,7 +307,8 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False) -> No
 
 def enhance(path: str, level: int = None, preset=None, user_filters: list = None,
             passes: int = 1, target_res: int = None, ceiling: int = None,
-            out_dir: str = None, keep_original: bool = False) -> str:
+            out_dir: str = None, keep_original: bool = False,
+            progress_cb=None) -> str:
     """
     Restoration + upscale pipeline.
 
@@ -333,7 +356,6 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
             return path  # at/above ceiling with no explicit target, nothing to do
 
     do_upscale = eff_target > short_side
-    passes = cap_passes(passes, eff_target)
 
     # Auto-detect tier if no override given
     tier = level if level else _detect_tier(path, w, h)
@@ -349,8 +371,11 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
     tmp_enc      = os.path.join(dirname, f"tmp_{name}_enc.mp4")
 
     print(f"[ffmpeg] cleanup: {short_side}p (tier {tier})")
+    if progress_cb:
+        progress_cb(f"__stage__:cleanup:{short_side}p tier {tier}")
     try:
-        _encode(current_path, tmp_enc, cleanup_vf, high_quality=True)
+        _encode(current_path, tmp_enc, cleanup_vf, high_quality=True,
+                progress_cb=progress_cb)
         os.replace(tmp_enc, cleanup_path)
         current_path = cleanup_path
     except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError) as e:
@@ -368,9 +393,13 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
 
         if pass_up:
             print(f"[ffmpeg] pass {i + 1}/{passes}: {current_height}p -> {eff_target}p")
+            if progress_cb:
+                progress_cb(f"__stage__:pass:{i+1}/{passes}:{current_height}p->{eff_target}p")
         else:
             pct = int(decay * 100)
             print(f"[ffmpeg] pass {i + 1}/{passes}: {eff_target}p refine ({pct}% strength)")
+            if progress_cb:
+                progress_cb(f"__stage__:pass:{i+1}/{passes}:{eff_target}p refine {pct}%")
 
         if passes > 1 and preset is not None:
             main_vf = _preset_chain(preset, eff_target, is_portrait, pass_up, decay)
@@ -393,7 +422,7 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
                     else os.path.join(dirname, f"tmp_{name}_p{i + 1}.mp4"))
 
         try:
-            _encode(current_path, tmp_enc, main_vf)
+            _encode(current_path, tmp_enc, main_vf, progress_cb=progress_cb)
             os.replace(tmp_enc, out_path)
 
             if current_path != path and os.path.exists(current_path):

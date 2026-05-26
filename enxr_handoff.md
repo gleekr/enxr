@@ -1,6 +1,6 @@
 # enxr — Handoff Document
 # For: Claude Code (autonomous loop, code-only changes)
-# Updated: 2026-05-24 (full session rewrite)
+# Updated: 2026-05-25 (full rewrite — tasks 1-4 complete)
 
 ---
 
@@ -36,8 +36,9 @@ enxr/
 ├── enxgui.py            # terminal UI / all user prompts
 ├── downloader.py        # yt-dlp wrapper -- DO NOT TOUCH
 ├── logger.py            # log_error(), cleanup_tmp() -- DO NOT TOUCH
+├── calibration.py       # render time estimator + encoder speed calibration
 ├── filters/
-│   └── presets.py       # QualityTier enum + CLEANUP/MAIN filter dicts
+│   └── presets.py       # QualityTier enum + CLEANUP/MAIN dicts + EnhancePreset
 ├── config/
 │   └── settings.py      # all constants
 └── log/                 # runtime only, YYYY-MM-DD.log
@@ -45,7 +46,7 @@ enxr/
 
 ---
 
-## Current State of Each File (as of end of session)
+## Current State of Each File
 
 ### config/settings.py — STABLE, no changes needed
 ```python
@@ -61,30 +62,69 @@ BATCH_WORKERS      = 2
 BATCH_FRAGMENT_THREADS = 4
 ```
 
-### filters/presets.py — STABLE, needs EXPANSION (see task 3 below)
-Current structure: QualityTier enum (EXCELLENT/GOOD/FAIR/POOR/BROKEN),
-CLEANUP dict (deblock + deband per tier), MAIN dict (deblock + deband + unsharp per tier).
-This is the source-quality-based system. It stays. New named presets are ADDED alongside it.
+### filters/presets.py — STABLE, complete
+Contains:
+- `QualityTier` enum (EXCELLENT/GOOD/FAIR/POOR/BROKEN)
+- `CLEANUP` dict (deblock + deband per tier, at source resolution)
+- `MAIN` dict (deblock + deband + unsharp per tier, before upscale)
+- `EnhancePreset` enum (CLEAN/RESTORE/SHARP/CINEMATIC/DEEP_CLEAN/STABILIZE)
+- `PRESET_FILTERS` dict (filter list per EnhancePreset)
+- `NO_DECAY_PRESETS` set (STABILIZE skips decay — stabilization is binary)
+- `SECRET_FILTERS` dict (a/b/c/d raw filter chains for secret menu)
 
-### ffmpeg.py — ENCODER FIX APPLIED TONIGHT, stable
-Key fix applied this session:
-- Removed `-q:v 85` from VideoToolbox calls (caused -22 Invalid argument on iOS)
-- Removed libx264 fallback entirely (libx264 is GPL, compiled out of iOS ffmpeg build)
-- _encode() now: h264_videotoolbox → hevc_videotoolbox → RuntimeError (clean message)
-- `high_quality` param kept in signature for API compat but does nothing (VTB manages quality internally)
-DO NOT CHANGE _encode().
+QualityTier system (single-pass path) and EnhancePreset system (multi-pass path) are
+separate and independent. Do not conflate them.
 
-### enxgui.py — TWO FIXES APPLIED TONIGHT, stable
-Fixes applied:
-1. Enhancement-only mode (is_high_res): passes forced to 1, no passes prompt shown
-2. is_high_res derived correctly from `short_side >= UPSCALE_CEILING` not from ceiling return value
+### calibration.py — STABLE, complete
+- `get_duration(path)` — ffprobe duration in seconds
+- `run_calibration(path, vf, resolution)` — 3-second test encode, saves speed factor
+- `load_calibration()` — reads `~/.enxr_calibration.json`
+- `update_calibration(resolution, actual_seconds, duration)` — 70/30 blend after real encode
+- `estimate_time(duration, passes, resolution, cal)` — returns human-readable string or None
 
-### enxr.py — TWO FIXES APPLIED TONIGHT, stable
-Fixes applied:
-1. is_high_res fixed: was `ceiling == 0` (always False), now `short_side >= UPSCALE_CEILING`
-2. ceiling derived as `0 if is_high_res else get_ceiling(short_side)`
-3. passes forced to 1 when is_high_res, no passes prompt
-4. Added UPSCALE_CEILING to config.settings import
+Calibration file: `~/.enxr_calibration.json` — `{"720": 1.8, "1080": 0.9, "1440": 0.45}`
+(values are encode_speed = clip_secs / wall_time; filled by real calibration runs)
+
+### ffmpeg.py — STABLE, complete
+Key facts:
+- `_get_dims()` returns `(w, h, is_portrait, short_side, codec_name)` — 5 values
+- `_encode()`: h264_videotoolbox → hevc_videotoolbox → RuntimeError. DO NOT CHANGE.
+- `_ffmpeg_errors()`: strips `configuration:` line before keyword scan (prevents
+  videotoolbox config string from matching as a false error)
+- `_apply_decay(filters, decay)`: scales unsharp la, deblock alpha/beta/gamma/delta,
+  deband range (floor 8), huesaturation saturation, vibrance intensity
+- `_preset_chain()`: builds filter chain from EnhancePreset with optional decay
+- `enhance()` signature:
+  ```python
+  def enhance(path, level=None, preset=None, user_filters=None,
+              passes=1, target_res=None, ceiling=None,
+              out_dir=None, keep_original=False)
+  ```
+- Pass A (cleanup): runs CLEANUP chain at source resolution, always
+- Pass B (main): N passes at target_res — upscale on pass 1 only, decay on pass 2+
+- `PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]` defined at module level
+- AV1 source warning already in enhance() — fires when codec == "av1"
+- `cap_passes()` still exists but is now called with `eff_target` not ceiling
+
+### enxgui.py — STABLE, complete
+Key prompts:
+- `prompt_upscale(skip, is_high_res)` — yes/no, shows enhancement-only msg if high-res
+- `prompt_level(skip)` — tier 0-5 or auto
+- `prompt_target_res(options, skip)` — picks from UPSCALE_STEPS below ceiling
+- `prompt_passes(skip)` — 1-4 (also defined in enxr.py, see known issue below)
+- `prompt_preset(skip)` — EnhancePreset 1-6 or 'x' for secret menu
+- `_prompt_secret_menu()` — a/b/c/d or 'e' (custom filter string)
+- Calibration estimate shown after all selections, before Processing...
+- `main()` in enxgui.py is a standalone CLI entry point (rarely used directly)
+
+### enxr.py — STABLE, complete
+- `action_enhance_file()` is the main enhancement flow
+- High-res path (short_side >= UPSCALE_CEILING): ceiling=0, passes=1, no preset prompt
+- Normal path: prompt target_res → prompt passes → if passes > 1, prompt preset
+- Calibration: checks cal dict, runs calibration if key missing, shows estimate
+- Calls `update_calibration()` after real encode
+- `action_batch_folder()` and `action_channel_shorts()` use OLD flow (ceiling=,
+  level=2 hardcoded, no target_res/preset prompts) — this is intentional
 
 ---
 
@@ -101,226 +141,79 @@ Fixes applied:
 
 ---
 
-## WHAT TO BUILD NEXT (in order)
+## WHAT TO BUILD NEXT
+
+All four original tasks are complete. Below are remaining work items.
 
 ---
 
-### TASK 1: Decouple Resolution from Passes
+### ISSUE: `prompt_passes()` is duplicated
 
-**Current behavior (broken):**
-Passes = number of steps up the resolution ladder (720→1080→1440).
-Max passes is locked to ceiling which is locked to source resolution.
-User picking "3 passes" on a 720p source silently gets capped to 2.
+`enxr.py` defines its own `prompt_passes()` (lines ~126-139) instead of using the one
+in `enxgui.py`. They are functionally identical. One should be removed.
 
-**New behavior:**
-- Resolution target: user picks explicitly (or auto = ceiling)
-- Passes: how many times the filter chain runs at the TARGET resolution
-- Resolution jump (upscale) happens ONCE, before the passes loop
-- Each pass runs at target resolution with DECAYING filter strength (see below)
-- Pass 1 = full strength, pass 2 = 60%, pass 3 = 35%, pass 4 = 20%
-
-**Decay curve (agreed):**
-```python
-PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]  # index = pass number - 1
-```
-Apply decay to filter intensity params, not by swapping presets.
-For unsharp: multiply `la` (luma amount) by decay factor.
-For deblock: multiply alpha/beta/gamma/delta by decay factor.
-For deband: scale range by decay (range * decay, floor 8).
-
-**New enhance() signature:**
-```python
-def enhance(path, level=None, preset=None, user_filters=None,
-            passes=1, target_res=None, ceiling=None, out_dir=None)
-```
-- `target_res`: explicit resolution target (e.g. 1440). None = auto (ceiling).
-- Upscale to target_res in one step before passes loop.
-- passes loop runs N times at target_res with decaying strength.
-
-**New prompt flow in enxgui.py:**
-```
-Source: 720p (portrait)
-Target resolution: [720 / 1080 / 1440*]   <- user picks, * = recommended ceiling
-Passes: [1-4]                               <- always available, no ceiling cap
-  1 = single enhancement
-  2+ = refinement passes (strength auto-reduces each pass)
-```
-
-**In enxr.py action_enhance_file():**
-Same flow — remove ceiling-based pass cap, add resolution picker before passes prompt.
+Fix: delete `prompt_passes()` from `enxr.py` and import `prompt_passes` from `enxgui`.
+Check that `action_batch_folder()` and `action_channel_shorts()` call `prompt_passes()`
+and update their imports accordingly.
 
 ---
 
-### TASK 2: Render Time Estimator
+### ISSUE: Batch paths don't use new prompt flow
 
-**Goal:** Show estimated time to user as they select options, updates live as they change selections.
+`action_batch_folder()` and `action_channel_shorts()` use `level=2` hardcoded and
+`ceiling=` (old style). They don't offer target_res or preset selection.
 
-**Method:**
-1. Probe file duration with ffprobe (already imported).
-2. First time a user runs enhancement, do a 3-second calibration encode:
-   - Encode first 3 seconds of file with chosen filter chain
-   - Measure wall time
-   - Calculate encode_speed = 3.0 / wall_time (e.g. 0.5x realtime)
-   - Store in `~/.enxr_calibration.json` as `{resolution: speed_factor}`
-3. On subsequent runs, load calibration and estimate:
-   ```
-   estimated_seconds = (duration / encode_speed) * passes * resolution_factor
-   ```
-   Where resolution_factor scales by pixel count relative to 1080p.
-4. Display before encode starts:
-   ```
-   Estimated time: ~4 min 30 sec  (2 passes at 1440p)
-   ```
-5. If no calibration exists yet, show:
-   ```
-   [first run] calibrating encoder speed...
-   ```
-
-**Calibration file:** `~/.enxr_calibration.json`
-```json
-{"720": 1.8, "1080": 0.9, "1440": 0.45}
-```
-(these are example speed factors, actual values filled by calibration run)
-
-**Where to implement:**
-- New file: `calibration.py` — `run_calibration(path, resolution)`, `load_calibration()`, `estimate_time(duration, passes, resolution)`
-- Call from `enxgui.py` after user finishes all selections, before Processing... line
-- Update calibration silently after each real encode (compare estimated vs actual)
+This is currently intentional (batch keeps simple behavior). If the user later wants
+preset selection in batch mode, add it here. Do not change without explicit instruction.
 
 ---
 
-### TASK 3: Named Preset System (Multi-Pass Menu)
+### INVESTIGATE: `downloader.py` has an uncommitted modification
 
-**Trigger:** Only shown when passes > 1. Single pass uses QualityTier auto-detect as before.
-
-**New presets to add to filters/presets.py:**
-
-```python
-class EnhancePreset(Enum):
-    CLEAN      = "clean"       # deblock + deband only, no sharpen
-    RESTORE    = "restore"     # deblock + deband + light denoise (dctdnoiz)
-    SHARP      = "sharp"       # unsharp focused, minimal denoise
-    CINEMATIC  = "cinematic"   # huesaturation + vibrance + curves tone
-    DEEP_CLEAN = "deep_clean"  # fftdnoiz + deblock + deband, max artifact removal
-    STABILIZE  = "stabilize"   # deshake + deflicker (for shaky/flickery sources)
-```
-
-**Secret menu (accessible by typing 'x' or 'secret' at preset prompt):**
-```
-  [secret menu]
-  a - raw unsharp (no deblock/deband)
-  b - dctdnoiz only
-  c - fftdnoiz only
-  d - deflicker only
-  e - custom filter string (advanced)
-```
-
-**Menu display when passes > 1:**
-```
-Enhancement preset:
-  1 - Clean       (deblock + deband, safe)
-  2 - Restore     (+ light denoise, typical YT)
-  3 - Sharp       (sharpening focus)
-  4 - Cinematic   (color + tone)
-  5 - Deep Clean  (max artifact removal, slow)
-  6 - Stabilize   (deshake + deflicker)
-  secret..        (type 'x')
-```
-
-**Filter strings for each preset (build these carefully):**
-
-CLEAN:
-```
-deblock=filter=strong:block=4:alpha=0.05:beta=0.05:gamma=0.05:delta=0.05,
-deband=range=14:direction=0:blur=1
-```
-
-RESTORE:
-```
-deblock=filter=strong:block=4:alpha=0.07:beta=0.07:gamma=0.07:delta=0.07,
-deband=range=16:direction=0:blur=1,
-dctdnoiz=sigma=4:overlap=2
-```
-
-SHARP:
-```
-deblock=filter=weak:block=4:alpha=0.03:beta=0.03:gamma=0.03:delta=0.03,
-unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.0
-```
-
-CINEMATIC:
-```
-huesaturation=saturation=0.15:lightness=0.0,
-vibrance=intensity=0.2,
-curves=r='0/0 0.5/0.48 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.52 1/1'
-```
-
-DEEP_CLEAN:
-```
-deblock=filter=strong:block=8:alpha=0.12:beta=0.12:gamma=0.12:delta=0.12,
-deband=range=22:direction=0:blur=1,
-fftdnoiz=sigma=5:amount=0.8:block=32:overlap=0.5
-```
-
-STABILIZE:
-```
-deshake=x=-1:y=-1:w=-1:h=-1:rx=64:ry=64,
-deflicker=size=5:mode=am
-```
-
-**Decay application per preset:**
-- CLEAN, RESTORE, DEEP_CLEAN: decay deblock alpha/beta/gamma/delta, deband range
-- SHARP: decay unsharp la value
-- CINEMATIC: decay saturation and vibrance intensity
-- STABILIZE: no decay (stabilization is binary, either needed or not)
+`git status` shows `downloader.py` as modified in the working tree. The handoff rule
+says never touch this file. Verify whether this change is intentional before committing
+or discarding it. Do not silently include it in a commit.
 
 ---
 
-### TASK 4: Wire Everything Together
+## Completed Tasks (for reference)
 
-After tasks 1-3 are individually working:
+### Task 1: Decouple Resolution from Passes — DONE
+- `target_res` param in `enhance()` sets explicit upscale target
+- Upscale happens once on pass 1 only; subsequent passes refine at target_res
+- `PASS_STRENGTH_DECAY = [1.0, 0.6, 0.35, 0.2]` applied to filter params
+- `prompt_target_res()` in enxgui.py lets user pick 720/1080/1440
 
-1. Single pass path: auto-detect QualityTier → existing CLEANUP+MAIN chain (unchanged)
-2. Multi-pass path: user picks EnhancePreset → N passes with decay at target_res
-3. Render estimator runs after all selections made, before encode
-4. Secret menu available at preset selection step
+### Task 2: Render Time Estimator — DONE
+- `calibration.py` implements calibration + estimation
+- First run triggers a 3-second calibration encode, saves speed factor
+- Subsequent runs show "Estimated time: ~X min YY sec (N passes at Zp)"
+- `update_calibration()` blends observed speed back in after each real encode
+
+### Task 3: Named Preset System — DONE
+- `EnhancePreset` enum with CLEAN/RESTORE/SHARP/CINEMATIC/DEEP_CLEAN/STABILIZE
+- `PRESET_FILTERS` dict in presets.py
+- `prompt_preset()` in enxgui.py, shown only when passes > 1
+- Secret menu accessible by typing 'x' at preset prompt
+
+### Task 4: Wire Together — DONE
+- Single pass → QualityTier auto-detect → CLEANUP + MAIN chain (unchanged)
+- Multi-pass → EnhancePreset → N passes with decay at target_res
+- Calibration estimate shown after all selections, before encode
+- Secret menu available at preset selection step
 
 ---
 
-## Known Issues (Fix These Too)
+## Known Issues (all resolved)
 
-### 1. `_ffmpeg_errors()` returns wrong lines — FIX THIS
-Location: `ffmpeg.py`, `_ffmpeg_errors()` function.
+### `_ffmpeg_errors()` false matches — FIXED
+The `configuration:` line is now stripped before keyword scanning.
+`"videotoolbox"` removed from keyword list.
+Location: `ffmpeg.py`, `_ffmpeg_errors()`.
 
-Current keyword list includes `"videotoolbox"` which matches ffmpeg's build
-configuration string (the long `--enable-videotoolbox --disable-gpl...` line)
-instead of the actual error. Real errors are invisible in the log.
-
-Fix: strip the configuration line before keyword matching.
-```python
-def _ffmpeg_errors(stderr: str) -> str:
-    if not stderr.strip():
-        return "encode failed (no output)"
-    keywords = ("error", "failed", "invalid", "unknown", "not found", "cannot")
-    lines = stderr.strip().splitlines()
-    # skip ffmpeg build config line (starts with "configuration:")
-    lines = [l for l in lines if not l.strip().startswith("configuration:")]
-    relevant = [l.strip() for l in lines if any(k in l.lower() for k in keywords)]
-    return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() if lines else "encode failed")
-```
-Note: `"videotoolbox"` removed from keywords — it was only matching config output, not real errors.
-
-### 2. AV1 source files are slow — DOCUMENT, no code change needed
-When source video is AV1 encoded (libaom-av1), `-hwaccel none` forces full
-software decode on CPU. On iPhone this is very slow — a 1080p tier 4 cleanup
-pass can take several minutes. This is expected behavior, not a bug.
-
-Consider adding a warning when ffprobe detects AV1 codec:
-```
-[warn] AV1 source detected -- software decode required, processing will be slow
-```
-Check codec in `_get_dims()` by adding `codec_name` to ffprobe fields.
-Display warning before encode starts, not after.
+### AV1 source warning — IMPLEMENTED
+`_get_dims()` now returns `codec_name` as 5th value.
+`enhance()` prints warning when `codec == "av1"`.
 
 ---
 

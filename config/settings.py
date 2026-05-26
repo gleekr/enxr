@@ -24,14 +24,6 @@ SOURCE_CEILING = {
     0:    1080,   # below 720p        -> cap at 1080
 }
 
-# ── Max passes per ceiling ────────────────────────────────────────────────────
-CEILING_MAX_PASSES = {
-    0:    4,   # source lock (refinement passes)
-    1440: 3,   # e.g. 720->1080->1440 + 1 refine
-    1080: 2,
-    720:  2,
-}
-
 # ── Download workers ──────────────────────────────────────────────────────────
 BATCH_WORKERS          = 2
 BATCH_FRAGMENT_THREADS = 4
