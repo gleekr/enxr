@@ -154,7 +154,8 @@ def download_batch(url: str, dest: str = BATCH_DEST,
         flat_opts["playlist_items"] = playlist_items
     with yt_dlp.YoutubeDL(flat_opts) as ydl:  # type: ignore[arg-type]
         info    = ydl.extract_info(url, download=False)
-    entries = info.get("entries") or [info]
+    entries = sorted(info.get("entries") or [info],
+                     key=lambda e: e.get("view_count") or 0, reverse=True)
     total   = len(entries)
     print(f"[batch] {total} video(s) -- {BATCH_WORKERS} workers x {BATCH_FRAGMENT_THREADS} threads")
 
