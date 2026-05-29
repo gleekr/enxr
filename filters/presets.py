@@ -18,8 +18,8 @@ class EnhancePreset(Enum):
     STABILIZE  = "stabilize"
 
 
-# Presets that skip decay (stabilization is binary, decay not meaningful)
-NO_DECAY_PRESETS = {EnhancePreset.STABILIZE}
+# Presets that skip decay (fixed effects where scaling params doesn't make sense)
+NO_DECAY_PRESETS = {EnhancePreset.STABILIZE, EnhancePreset.CINEMATIC}
 
 
 PRESET_FILTERS = {
@@ -28,23 +28,22 @@ PRESET_FILTERS = {
         "deband=range=14:direction=0:blur=1",
     ],
     EnhancePreset.RESTORE: [
-        "deblock=filter=strong:block=4:alpha=0.07:beta=0.07:gamma=0.07:delta=0.07",
-        "deband=range=16:direction=0:blur=1",
-        "dctdnoiz=sigma=4:overlap=2",
+        "deblock=filter=strong:block=4:alpha=0.09:beta=0.09:gamma=0.09:delta=0.09",
+        "deband=range=18:direction=0:blur=1",
+        "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.0",
     ],
     EnhancePreset.SHARP: [
         "deblock=filter=weak:block=4:alpha=0.03:beta=0.03:gamma=0.03:delta=0.03",
         "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.0",
     ],
     EnhancePreset.CINEMATIC: [
-        "huesaturation=saturation=0.15:lightness=0.0",
-        "vibrance=intensity=0.2",
+        "eq=saturation=1.15:contrast=1.05",
         "curves=r='0/0 0.5/0.48 1/1':g='0/0 0.5/0.5 1/1':b='0/0 0.5/0.52 1/1'",
     ],
     EnhancePreset.DEEP_CLEAN: [
-        "deblock=filter=strong:block=8:alpha=0.12:beta=0.12:gamma=0.12:delta=0.12",
+        "deblock=filter=strong:block=8:alpha=0.14:beta=0.14:gamma=0.14:delta=0.14",
         "deband=range=22:direction=0:blur=1",
-        "fftdnoiz=sigma=5:amount=0.8:block=32:overlap=0.5",
+        "deband=range=12:direction=0:blur=0",
     ],
     EnhancePreset.STABILIZE: [
         "deshake=x=-1:y=-1:w=-1:h=-1:rx=64:ry=64",
@@ -55,8 +54,9 @@ PRESET_FILTERS = {
 # Secret menu filter chains (raw, no QualityTier detection)
 SECRET_FILTERS = {
     'a': ["unsharp=lx=5:ly=5:la=0.5:cx=5:cy=5:ca=0.0"],
-    'b': ["dctdnoiz=sigma=4:overlap=2"],
-    'c': ["fftdnoiz=sigma=5:amount=0.8:block=32:overlap=0.5"],
+    'b': ["unsharp=lx=3:ly=3:la=0.9:cx=3:cy=3:ca=0.0"],
+    'c': ["deblock=filter=strong:block=8:alpha=0.14:beta=0.14:gamma=0.14:delta=0.14",
+          "deband=range=22:direction=0:blur=1"],
     'd': ["deflicker=size=5:mode=am"],
 }
 

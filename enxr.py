@@ -273,7 +273,7 @@ def action_batch_folder(skip_prompts: bool = False):
     if confirm not in ('y', 'yes'):
         return
 
-    passes = prompt_passes(skip_prompts)
+    passes = enxgui.prompt_passes(skip_prompts)
 
     success = 0
     failed = 0
@@ -363,7 +363,7 @@ def action_channel_shorts(skip_prompts: bool = False):
         print(f"\n{Color.YELLOW}Skipped enhancement.{Color.RESET}")
         return
 
-    passes  = prompt_passes(skip_prompts)
+    passes  = enxgui.prompt_passes(skip_prompts)
     success = 0
     failed  = 0
 

@@ -297,9 +297,14 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False,
         return
     log_error("hevc_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
 
+    ok, err = _try_encode(base_args + ["-c:v", "libx264", tmp_path], tmp_path, progress_cb)
+    if ok:
+        print("[ffmpeg] VideoToolbox unavailable, fell back to libx264")
+        return
+
     raise RuntimeError(
         "no compatible encoder found -- "
-        "h264_videotoolbox and hevc_videotoolbox both failed"
+        "h264_videotoolbox, hevc_videotoolbox, and libx264 all failed"
     )
 
 

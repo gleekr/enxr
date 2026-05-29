@@ -179,9 +179,9 @@ def prompt_passes(skip_prompts: bool = False) -> int:
 def _prompt_secret_menu() -> tuple:
     """Secret preset menu. Returns (None, user_filters list)."""
     print(f"\n{Color.DIM}[secret menu]{Color.RESET}")
-    print("  a - raw unsharp (no deblock/deband)")
-    print("  b - dctdnoiz only")
-    print("  c - fftdnoiz only")
+    print("  a - unsharp (moderate, no deblock/deband)")
+    print("  b - unsharp (aggressive, frequency detail)")
+    print("  c - max deblock + deband (heavy cleanup)")
     print("  d - deflicker only")
     print("  e - custom filter string (advanced)")
     while True:
