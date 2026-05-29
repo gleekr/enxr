@@ -313,7 +313,7 @@ def _encode(path: str, tmp_path: str, vf: str, high_quality: bool = False,
 def enhance(path: str, level: int = None, preset=None, user_filters: list = None,
             passes: int = 1, target_res: int = None, ceiling: int = None,
             out_dir: str = None, keep_original: bool = False,
-            progress_cb=None) -> str:
+            skip_existing: bool = False, progress_cb=None) -> str:
     """
     Restoration + upscale pipeline.
 
@@ -321,11 +321,13 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
     Pass B (main):    sharpen + one-shot upscale to target_res, then N-1
                       refinement passes at target_res with decaying strength.
 
-    level:      quality tier override 1-5, None = auto-detect, 0 = skip.
-    preset:     EnhancePreset for multi-pass (Task 3, reserved).
-    target_res: explicit upscale target (e.g. 1440). None = derive from ceiling.
-    ceiling:    0 = source lock. None = auto from source. Otherwise cap.
-    out_dir:    final output directory (defaults to same dir as input).
+    level:         quality tier override 1-5, None = auto-detect, 0 = skip.
+    preset:        EnhancePreset for multi-pass (Task 3, reserved).
+    target_res:    explicit upscale target (e.g. 1440). None = derive from ceiling.
+    ceiling:       0 = source lock. None = auto from source. Otherwise cap.
+    out_dir:       final output directory (defaults to same dir as input).
+    skip_existing: if the ex<name>.mp4 output already exists, return it without
+                   re-encoding -- lets an interrupted batch resume cheaply.
 
     Returns output path on success, original path on skip/failure.
     """
@@ -344,6 +346,11 @@ def enhance(path: str, level: int = None, preset=None, user_filters: list = None
 
     if level == 0:
         return path
+
+    existing = os.path.join(final_dir, f"ex{name}.mp4")
+    if skip_existing and os.path.isfile(existing):
+        print(f"[ffmpeg] skip -- already enhanced: {os.path.basename(existing)}")
+        return existing
 
     is_high_res = (short_side >= UPSCALE_CEILING)
 

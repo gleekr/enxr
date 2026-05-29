@@ -19,14 +19,14 @@ Examples:
   SKIP_PROMPTS=1 python3 enxr.py ~/Downloads/video.mp4
 """
 
-import os, sys, re as _re
+import os, sys, re as _re, shutil
 
 import time
 
 from downloader import download, download_batch, DEFAULT_DEST
 from ffmpeg import _get_dims, get_ceiling, enhance, _main_chain
 from logger import log_error
-from config.settings import UPRES_DEST, BATCH_DEST, UPSCALE_CEILING
+from config.settings import UPRES_DEST, BATCH_OG, BATCH_HD, UPSCALE_CEILING
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
 import enxgui
@@ -68,6 +68,20 @@ def _check_skip_context() -> bool:
     """Check if session has SKIP_PROMPTS flag."""
     return os.environ.get('SKIP_PROMPTS') == '1' or \
            os.environ.get('SKIP') == 'true'
+
+
+def _check_deps() -> bool:
+    """Verify ffmpeg + ffprobe are on PATH. Print a clear message if not.
+    yt-dlp is a Python import and fails at module load, so it isn't checked here.
+    Returns True if all present.
+    """
+    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+    if missing:
+        print(f"{Color.RED}Missing required tool(s): {', '.join(missing)}{Color.RESET}")
+        print(f"  {Color.DIM}Install FFmpeg and ensure it's on PATH "
+              f"(a-shell: 'pkg install ffmpeg').{Color.RESET}")
+        return False
+    return True
 
 
 def print_header():
@@ -322,7 +336,8 @@ def action_batch_folder(skip_prompts: bool = False):
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
 
-            out = enhance(file_path, level=2, user_filters=None, passes=passes, ceiling=ceiling)
+            out = enhance(file_path, level=2, user_filters=None, passes=passes,
+                          ceiling=ceiling, skip_existing=True)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
             success += 1
         except Exception as e:
@@ -374,7 +389,7 @@ def action_channel_shorts(skip_prompts: bool = False):
 
     print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
     try:
-        files, channel_dir = download_batch(url, BATCH_DEST, playlist_items)
+        files, channel_dir = download_batch(url, BATCH_OG, playlist_items)
     except Exception as e:
         log_error("channel_shorts_download", e, extra=f"url={url}")
         print(f"{Color.RED}Download failed: {e}{Color.RESET}")
@@ -385,13 +400,14 @@ def action_channel_shorts(skip_prompts: bool = False):
         return
 
     channel_name = os.path.basename(channel_dir)
-    upres_dir    = os.path.join(channel_dir, "upres")
+    upres_dir    = os.path.join(BATCH_HD, channel_name)
+    os.makedirs(upres_dir, exist_ok=True)
 
     print(f"\n{Color.CYAN}-------------------------------------------{Color.RESET}")
-    print(f"{Color.BOLD}Channel:{Color.RESET}  {channel_name}")
-    print(f"{Color.BOLD}Files:{Color.RESET}    {len(files)} downloaded")
-    print(f"{Color.BOLD}noenx/{Color.RESET}    originals")
-    print(f"{Color.BOLD}upres/{Color.RESET}    enhanced output")
+    print(f"{Color.BOLD}Channel:{Color.RESET}    {channel_name}")
+    print(f"{Color.BOLD}Files:{Color.RESET}      {len(files)} downloaded")
+    print(f"{Color.BOLD}batch/og/{Color.RESET}  originals")
+    print(f"{Color.BOLD}batch/hd/{Color.RESET}  enhanced output")
     print(f"{Color.CYAN}-------------------------------------------{Color.RESET}")
 
     confirm = _input(f"\n{Color.BOLD}Enhance all? (yes/no):{Color.RESET} ").lower()
@@ -411,7 +427,8 @@ def action_channel_shorts(skip_prompts: bool = False):
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
             out = enhance(file_path, level=2, user_filters=None, passes=passes,
-                          ceiling=ceiling, out_dir=upres_dir, keep_original=True)
+                          ceiling=ceiling, out_dir=upres_dir, keep_original=True,
+                          skip_existing=True)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
             success += 1
         except Exception as e:
@@ -432,6 +449,9 @@ def main():
     skip_prompts = _check_skip_context()
 
     print_header()
+
+    if not _check_deps():
+        sys.exit(1)
 
     if args:
         file_or_url = args[0]
@@ -484,4 +504,17 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{Color.YELLOW}Interrupted.{Color.RESET}")
+        # Sweep stray tmp_*.mp4 left mid-encode. enhance() writes tmp files in
+        # the input file's dir, which for batches is a per-channel subfolder --
+        # so walk the roots recursively rather than globbing the top level.
+        from logger import cleanup_tmp
+        for root in (DEFAULT_DEST, UPRES_DEST, BATCH_OG, BATCH_HD):
+            if not os.path.isdir(root):
+                continue
+            for dirpath, _, _ in os.walk(root):
+                cleanup_tmp(dirpath)
+        sys.exit(130)

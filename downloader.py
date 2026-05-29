@@ -13,7 +13,9 @@ from typing import Any, Optional
 import yt_dlp
 from urllib.parse import urlparse
 
-from config.settings import DEFAULT_DEST, BATCH_DEST, BATCH_WORKERS, BATCH_FRAGMENT_THREADS
+from config.settings import (DEFAULT_DEST, BATCH_OG, BATCH_WORKERS,
+                             BATCH_FRAGMENT_THREADS, YT_PLAYER_CLIENT,
+                             YT_PLAYER_CLIENT_FALLBACK)
 
 
 # ── Shared download settings ──────────────────────────────────────────────────
@@ -30,16 +32,19 @@ _DL_BASE: dict[str, Any] = {
     "throttledratelimit":            100 * 1024,     # re-fetch fragment if speed drops below 100 KB/s
     "socket_timeout":                30,
     "noplaylist":                    True,           # safety -- callers set False when needed
-    # iOS: prefer clients that return pre-signed stream URLs so the
-    # apple-webkit-jsi challenge solver never launches WebKit -- WebKit
-    # navigating youtube.com is what triggers the YouTube app via universal
-    # links. ios/tv clients avoid n-sig solving; web is excluded on purpose.
-    "extractor_args":               {"youtube": {"player_client": ["ios", "tv"]}},
+    # player_client controls which YouTube clients yt-dlp extracts with -- see
+    # _client_args() and config.settings.YT_PLAYER_CLIENT for the rationale.
+    "extractor_args":               {"youtube": {"player_client": list(YT_PLAYER_CLIENT)}},
 }
 
 _HANDLE_RE  = re.compile(r'/@([^/?#]+)')
 _CHANNEL_RE = re.compile(r'/(?:channel|c)/([^/?#]+)')
 _SLUG_CLEAN = re.compile(r'[^\w\-]')
+
+
+def _client_args(clients: list) -> dict[str, Any]:
+    """extractor_args dict pinning yt-dlp to the given YouTube player clients."""
+    return {"youtube": {"player_client": list(clients)}}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -71,7 +76,7 @@ def _detect_playlist(url: str) -> tuple[bool, int]:
     Fast: no download, just metadata. Returns (False, 0) on any error."""
     try:
         probe_opts = {"quiet": True, "extract_flat": True, "noplaylist": False,
-                      "extractor_args": {"youtube": {"player_client": ["ios", "tv"]}}}
+                      "extractor_args": _client_args(YT_PLAYER_CLIENT)}
         with yt_dlp.YoutubeDL(probe_opts) as ydl:  # type: ignore[arg-type]
             info = ydl.extract_info(url, download=False)
         entries = info.get("entries")
@@ -123,24 +128,40 @@ def download(source: str, dest: str = DEFAULT_DEST) -> str:
     """
     os.makedirs(dest, exist_ok=True)
 
-    if _is_url(source):
-        file_id = _rand_id(dest)
-        with yt_dlp.YoutubeDL(_yt_opts(dest, file_id)) as ydl:  # type: ignore[arg-type]
-            ydl.download([source])
-        candidates = glob.glob(os.path.join(dest, f"{file_id}.*"))
-        mp4 = next((c for c in candidates if c.lower().endswith(".mp4")), None)
-        if not mp4:
-            raise FileNotFoundError(f"yt-dlp produced no .mp4 output for id {file_id}")
-        return mp4
-    else:
+    if not _is_url(source):
         return _copy_file(source, dest)
 
+    file_id = _rand_id(dest)
+    opts    = _yt_opts(dest, file_id)
 
-def download_batch(url: str, dest: str = BATCH_DEST,
+    def _attempt() -> Optional[str]:
+        with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
+            ydl.download([source])
+        candidates = glob.glob(os.path.join(dest, f"{file_id}.*"))
+        return next((c for c in candidates if c.lower().endswith(".mp4")), None)
+
+    try:
+        mp4 = _attempt()
+    except Exception:
+        mp4 = None
+
+    if not mp4:
+        # primary clients (ios/tv) failed -- retry once with web fallback
+        print("[yt-dlp] ios/tv extraction failed, retrying with web client "
+              "(may briefly open the YouTube app)")
+        opts["extractor_args"] = _client_args(YT_PLAYER_CLIENT_FALLBACK)
+        mp4 = _attempt()
+
+    if not mp4:
+        raise FileNotFoundError(f"yt-dlp produced no .mp4 output for id {file_id}")
+    return mp4
+
+
+def download_batch(url: str, dest: str = BATCH_OG,
                    playlist_items: Optional[str] = None) -> tuple[list[str], str]:
     """
     Download videos from a playlist or channel URL.
-    Originals land in dest/<channel>/noenx/.
+    Originals land in dest/<channel>/ (dest defaults to BATCH_OG).
     playlist_items: yt-dlp selection string e.g. "1-50" or "1,3,6,22" or None for all.
     Returns (list_of_paths, channel_dir).
     """
@@ -151,16 +172,15 @@ def download_batch(url: str, dest: str = BATCH_DEST,
 
     channel     = _channel_name_from_url(url)
     channel_dir = os.path.join(dest, channel)
-    noenx_dir   = os.path.join(channel_dir, "noenx")
-    os.makedirs(noenx_dir, exist_ok=True)
+    os.makedirs(channel_dir, exist_ok=True)
 
     # Flat probe respecting playlist_items filter so count is accurate.
-    # player_client must match _DL_BASE -- default clients (web/mweb) trigger
-    # the apple-webkit-jsi solver here too, opening the YouTube app at probe time.
+    # Pin the same player clients here -- the probe also opens the YouTube app
+    # at fetch time if it falls back to the default web/mweb clients.
     print("[batch] fetching playlist...")
     flat_opts: dict[str, Any] = {
         "quiet": True, "extract_flat": True, "noplaylist": False,
-        "extractor_args": {"youtube": {"player_client": ["ios", "tv"]}},
+        "extractor_args": _client_args(YT_PLAYER_CLIENT),
     }
     if playlist_items:
         flat_opts["playlist_items"] = playlist_items
@@ -174,6 +194,9 @@ def download_batch(url: str, dest: str = BATCH_DEST,
     tmp_dir = tempfile.mkdtemp(prefix="enxr_batch_")
     counter = [0]
     lock    = threading.Lock()
+    # Persistent archive of downloaded video IDs -- re-running a channel skips
+    # videos already grabbed, so you only pull new Shorts.
+    archive_path = os.path.join(channel_dir, ".dlarchive")
 
     def _dl_one(entry: Any, idx: int) -> Optional[str]:
         vid_id    = entry.get("id", "")
@@ -182,25 +205,38 @@ def download_batch(url: str, dest: str = BATCH_DEST,
                      or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""))
         if not entry_url:
             return None
-        opts: dict[str, Any] = {
-            **_DL_BASE,
-            "outtmpl":                       os.path.join(tmp_dir, "%(id)s.%(ext)s"),
-            "concurrent_fragment_downloads": BATCH_FRAGMENT_THREADS,
-            "quiet":                         True,
-            "no_warnings":                   True,
-        }
-        try:
+
+        def _attempt(clients: list) -> Optional[str]:
+            opts: dict[str, Any] = {
+                **_DL_BASE,
+                "outtmpl":                       os.path.join(tmp_dir, "%(id)s.%(ext)s"),
+                "concurrent_fragment_downloads": BATCH_FRAGMENT_THREADS,
+                "quiet":                         True,
+                "no_warnings":                   True,
+                "extractor_args":                _client_args(clients),
+                "download_archive":              archive_path,
+            }
             with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
                 ydl.extract_info(entry_url, download=True)
             candidates = glob.glob(os.path.join(tmp_dir, f"{vid_id}.*"))
-            mp4 = next((c for c in candidates if c.lower().endswith(".mp4")), None)
-            if mp4:
-                with lock:
-                    counter[0] += 1
-                    print(f"  [{counter[0]}/{total}] {vid_id}")
-                return mp4
-        except Exception as e:
-            print(f"  [!] {idx}/{total} failed: {e}")
+            return next((c for c in candidates if c.lower().endswith(".mp4")), None)
+
+        mp4 = None
+        try:
+            mp4 = _attempt(YT_PLAYER_CLIENT)
+        except Exception:
+            pass  # primary failed -- fall through to web fallback below
+        if not mp4:
+            try:
+                mp4 = _attempt(YT_PLAYER_CLIENT_FALLBACK)
+            except Exception as e:
+                print(f"  [!] {idx}/{total} failed: {e}")
+                return None
+        if mp4:
+            with lock:
+                counter[0] += 1
+                print(f"  [{counter[0]}/{total}] {vid_id}")
+            return mp4
         return None
 
     try:
@@ -215,11 +251,11 @@ def download_batch(url: str, dest: str = BATCH_DEST,
 
         downloaded: list[str] = []
         for tmp_path in sorted(tmp_files):
-            file_id  = _rand_id(noenx_dir)
-            out_path = os.path.join(noenx_dir, f"{file_id}.mp4")
+            file_id  = _rand_id(channel_dir)
+            out_path = os.path.join(channel_dir, f"{file_id}.mp4")
             shutil.move(tmp_path, out_path)
             downloaded.append(out_path)
-            print(f"[OK] {channel}/noenx/{file_id}.mp4")
+            print(f"[OK] {channel}/{file_id}.mp4")
 
         return downloaded, channel_dir
     finally:
@@ -239,7 +275,7 @@ def main() -> None:
             if _is_url(source):
                 is_playlist, count = _detect_playlist(source)
                 if is_playlist:
-                    print(f"[playlist] {count} video(s) detected -- downloading all to {BATCH_DEST}")
+                    print(f"[playlist] {count} video(s) detected -- downloading all to {BATCH_OG}")
                     files, _ = download_batch(source)
                     for f in files:
                         print(f"[OK] {f}")
