@@ -30,6 +30,7 @@ from config.settings import UPRES_DEST, BATCH_DEST, UPSCALE_CEILING
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
 import enxgui
+from enxgui import GoBack
 
 
 class Color:
@@ -51,11 +52,15 @@ def _rl_safe(s: str) -> str:
 
 
 def _input(prompt: str) -> str:
-    """input() wrapper -- type 'exit', 'quit', or 'q' at any prompt to quit."""
+    """input() wrapper.
+    'exit'/'quit'/'q' quits; 'back'/'go back'/'b' returns to the menu.
+    """
     val = input(_rl_safe(prompt)).strip()
     if val.lower() in ('exit', 'quit', 'q'):
         print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
         sys.exit(0)
+    if val.lower() in ('back', 'go back', 'b'):
+        raise GoBack()
     return val
 
 
@@ -173,46 +178,77 @@ def action_enhance_only(skip_prompts: bool = False):
 
 
 def action_enhance_file(file_path: str, skip_prompts: bool = False):
-    """Run enhancement on file via enxgui."""
+    """Run enhancement on file via enxgui.
+
+    Prompts run as a step machine: typing 'back' at any prompt returns to the
+    previous prompt; 'back' at the first prompt unwinds to the main menu.
+    """
     print(f"\n{Color.YELLOW}Analyzing...{Color.RESET}")
 
     try:
         w, h, is_portrait, short_side, codec = _get_dims(file_path)
-        orientation = "portrait" if is_portrait else "landscape"
+    except Exception as e:
+        log_error("enhance_file", e, extra=f"file={file_path}")
+        print(f"{Color.RED}Error: {e}{Color.RESET}")
+        return
 
-        print(f"{Color.GREEN}* Resolution:{Color.RESET} {w}x{h} ({orientation})")
+    orientation = "portrait" if is_portrait else "landscape"
+    print(f"{Color.GREEN}* Resolution:{Color.RESET} {w}x{h} ({orientation})")
 
-        options = enxgui._calculate_upscale_options(short_side, is_portrait)
-        enxgui._print_streams_detected(w, h, short_side, is_portrait, options)
+    options     = enxgui._calculate_upscale_options(short_side, is_portrait)
+    enxgui._print_streams_detected(w, h, short_side, is_portrait, options)
+    is_high_res = (short_side >= UPSCALE_CEILING)
 
-        is_high_res = (short_side >= UPSCALE_CEILING)
+    # ── prompt step machine ───────────────────────────────────────────────────
+    ans   = {}
+    steps = ['upscale', 'level'] if is_high_res else \
+            ['upscale', 'level', 'target_res', 'passes']
+    i = 0
+    while i < len(steps):
+        step = steps[i]
+        try:
+            if step == 'upscale':
+                ans['upscale'] = enxgui.prompt_upscale(skip_prompts, is_high_res)
+                if not ans['upscale']:
+                    print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
+                    return
+            elif step == 'level':
+                ans['level'] = enxgui.prompt_level(skip_prompts)
+                if ans['level'] == 0:
+                    print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
+                    return
+            elif step == 'target_res':
+                ans['target_res'] = enxgui.prompt_target_res(options, skip_prompts)
+            elif step == 'passes':
+                ans['passes'] = enxgui.prompt_passes(skip_prompts)
+                # preset step only exists for multi-pass runs
+                if ans['passes'] > 1 and 'preset' not in steps:
+                    steps.append('preset')
+                elif ans['passes'] <= 1 and 'preset' in steps:
+                    steps.remove('preset')
+            elif step == 'preset':
+                ans['preset'], ans['secret'] = enxgui.prompt_preset(skip_prompts)
+        except GoBack:
+            if i == 0:
+                print(f"\n{Color.DIM}Back to menu.{Color.RESET}")
+                return
+            i -= 1
+            continue
+        i += 1
 
-        should_upscale = enxgui.prompt_upscale(skip_prompts, is_high_res)
+    if is_high_res:
+        target_res     = short_side
+        passes         = 1
+        preset         = None
+        secret_filters = None
+    else:
+        target_res     = ans['target_res']
+        passes         = ans['passes']
+        preset         = ans.get('preset')
+        secret_filters = ans.get('secret')
+    level = ans['level']
 
-        if not should_upscale:
-            print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
-            return
-
-        level = enxgui.prompt_level(skip_prompts)
-        if level == 0:
-            print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
-            return
-
-        # Enhancement-only (high-res source): lock to source, 1 pass, no prompts
-        if is_high_res:
-            target_res     = short_side
-            passes         = 1
-            preset         = None
-            secret_filters = None
-        else:
-            target_res = enxgui.prompt_target_res(options, skip_prompts)
-            passes     = enxgui.prompt_passes(skip_prompts)
-            if passes > 1:
-                preset, secret_filters = enxgui.prompt_preset(skip_prompts)
-            else:
-                preset         = None
-                secret_filters = None
-
+    try:
         # Render time estimate / calibration
         duration = get_duration(file_path)
         tier_for_cal = max(1, min(5, level if level else enxgui._detect_tier(file_path, w, h)))
@@ -423,25 +459,28 @@ def main():
 
     while True:
         print_menu()
-        choice = prompt_choice()
+        try:
+            choice = prompt_choice()
 
-        if choice == '1':
-            action_download_enhance(skip_prompts)
-        elif choice == '2':
-            action_load_enhance(skip_prompts)
-        elif choice == '3':
-            action_download_only()
-        elif choice == '4':
-            action_enhance_only(skip_prompts)
-        elif choice == '5':
-            action_batch_folder(skip_prompts)
-        elif choice == '6':
-            action_channel_shorts(skip_prompts)
-        elif choice == '7':
-            print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
-            sys.exit(0)
+            if choice == '1':
+                action_download_enhance(skip_prompts)
+            elif choice == '2':
+                action_load_enhance(skip_prompts)
+            elif choice == '3':
+                action_download_only()
+            elif choice == '4':
+                action_enhance_only(skip_prompts)
+            elif choice == '5':
+                action_batch_folder(skip_prompts)
+            elif choice == '6':
+                action_channel_shorts(skip_prompts)
+            elif choice == '7':
+                print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
+                sys.exit(0)
 
-        _input(f"\n{Color.DIM}Press Enter to continue (or 'exit' to quit)...{Color.RESET}")
+            _input(f"\n{Color.DIM}Press Enter to continue ('back' for menu, 'exit' to quit)...{Color.RESET}")
+        except GoBack:
+            continue
 
 
 if __name__ == "__main__":
