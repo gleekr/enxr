@@ -101,29 +101,25 @@ CLEANUP = {
 MAIN = {
     QualityTier.EXCELLENT: [
         "format=yuv420p",
-        "unsharp=lx=5:ly=5:la=0.5:cx=5:cy=5:ca=0.0",
+        "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.0",
     ],
     QualityTier.GOOD: [
         "format=yuv420p",
-        "deblock=filter=weak:block=4:alpha=0.02:beta=0.02:gamma=0.02:delta=0.02",
-        "unsharp=lx=3:ly=3:la=0.4:cx=3:cy=3:ca=0.0",
+        "unsharp=lx=5:ly=5:la=0.55:cx=5:cy=5:ca=0.0",
     ],
     QualityTier.FAIR: [
         "format=yuv420p",
-        "deblock=filter=strong:block=4:alpha=0.05:beta=0.05:gamma=0.05:delta=0.05",
         "deband=range=12:direction=0:blur=1",
-        "unsharp=lx=3:ly=3:la=0.45:cx=3:cy=3:ca=0.0",
+        "unsharp=lx=5:ly=5:la=0.6:cx=5:cy=5:ca=0.0",
     ],
     QualityTier.POOR: [
         "format=yuv420p",
-        "deblock=filter=strong:block=4:alpha=0.07:beta=0.07:gamma=0.07:delta=0.07",
         "deband=range=16:direction=0:blur=1",
-        "unsharp=lx=5:ly=5:la=0.55:cx=5:cy=5:ca=0.0",
+        "unsharp=lx=5:ly=5:la=0.7:cx=5:cy=5:ca=0.0",
     ],
     QualityTier.BROKEN: [
         "format=yuv420p",
-        "deblock=filter=strong:block=8:alpha=0.10:beta=0.10:gamma=0.10:delta=0.10",
         "deband=range=20:direction=0:blur=1",
-        "unsharp=lx=5:ly=5:la=0.65:cx=5:cy=5:ca=0.0",
+        "unsharp=lx=5:ly=5:la=0.8:cx=5:cy=5:ca=0.0",
     ],
 }
