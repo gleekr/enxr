@@ -30,7 +30,11 @@ _DL_BASE: dict[str, Any] = {
     "throttledratelimit":            100 * 1024,     # re-fetch fragment if speed drops below 100 KB/s
     "socket_timeout":                30,
     "noplaylist":                    True,           # safety -- callers set False when needed
-    "extractor_args":               {"youtube": {"player_client": ["web"]}},
+    # iOS: prefer clients that return pre-signed stream URLs so the
+    # apple-webkit-jsi challenge solver never launches WebKit -- WebKit
+    # navigating youtube.com is what triggers the YouTube app via universal
+    # links. ios/tv clients avoid n-sig solving; web is excluded on purpose.
+    "extractor_args":               {"youtube": {"player_client": ["ios", "tv"]}},
 }
 
 _HANDLE_RE  = re.compile(r'/@([^/?#]+)')
