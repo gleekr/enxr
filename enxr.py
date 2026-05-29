@@ -24,9 +24,10 @@ import os, sys, re as _re, shutil
 import time
 
 from downloader import download, download_batch, DEFAULT_DEST
-from ffmpeg import _get_dims, get_ceiling, enhance, _main_chain
+from ffmpeg import _get_dims, get_ceiling, enhance
+from filters.presets import build_chain
 from logger import log_error
-from config.settings import UPRES_DEST, BATCH_OG, BATCH_HD, UPSCALE_CEILING
+from config.settings import UPRES_DEST, BATCH_OG, BATCH_HD
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
 import enxgui
@@ -210,38 +211,23 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
     print(f"{Color.GREEN}* Resolution:{Color.RESET} {w}x{h} ({orientation})")
 
     options     = enxgui._calculate_upscale_options(short_side, is_portrait)
-    enxgui._print_streams_detected(w, h, short_side, is_portrait, options)
-    is_high_res = (short_side >= UPSCALE_CEILING)
+    tier        = enxgui._detect_tier(file_path, w, h)
+    enxgui._print_streams_detected(w, h, short_side, is_portrait, options, tier)
 
-    # ── prompt step machine ───────────────────────────────────────────────────
+    # ── 3-prompt step machine: resolution -> restore -> enhance ───────────────
+    # 'back' steps to the previous prompt; 'back' at the first unwinds to menu.
     ans   = {}
-    steps = ['upscale', 'level'] if is_high_res else \
-            ['upscale', 'level', 'target_res', 'passes']
+    steps = ['resolution', 'restore', 'enhance']
     i = 0
     while i < len(steps):
         step = steps[i]
         try:
-            if step == 'upscale':
-                ans['upscale'] = enxgui.prompt_upscale(skip_prompts, is_high_res)
-                if not ans['upscale']:
-                    print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
-                    return
-            elif step == 'level':
-                ans['level'] = enxgui.prompt_level(skip_prompts)
-                if ans['level'] == 0:
-                    print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
-                    return
-            elif step == 'target_res':
-                ans['target_res'] = enxgui.prompt_target_res(options, skip_prompts)
-            elif step == 'passes':
-                ans['passes'] = enxgui.prompt_passes(skip_prompts)
-                # preset step only exists for multi-pass runs
-                if ans['passes'] > 1 and 'preset' not in steps:
-                    steps.append('preset')
-                elif ans['passes'] <= 1 and 'preset' in steps:
-                    steps.remove('preset')
-            elif step == 'preset':
-                ans['preset'], ans['secret'] = enxgui.prompt_preset(skip_prompts)
+            if step == 'resolution':
+                ans['target_res'] = enxgui.prompt_resolution(options, short_side, skip_prompts)
+            elif step == 'restore':
+                ans['restore'] = enxgui.prompt_restore(skip_prompts, suggested=tier)
+            elif step == 'enhance':
+                ans['enhance'] = enxgui.prompt_enhance(skip_prompts)
         except GoBack:
             if i == 0:
                 print(f"\n{Color.DIM}Back to menu.{Color.RESET}")
@@ -250,45 +236,34 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
             continue
         i += 1
 
-    if is_high_res:
-        target_res     = short_side
-        passes         = 1
-        preset         = None
-        secret_filters = None
-    else:
-        target_res     = ans['target_res']
-        passes         = ans['passes']
-        preset         = ans.get('preset')
-        secret_filters = ans.get('secret')
-    level = ans['level']
+    target_res    = ans['target_res']
+    restore_level = ans['restore']
+    enhance_level = ans['enhance']
 
     try:
         # Render time estimate / calibration
         duration = get_duration(file_path)
-        tier_for_cal = max(1, min(5, level if level else enxgui._detect_tier(file_path, w, h)))
         cal     = load_calibration()
         cal_key = str(target_res)
         if cal_key not in cal:
             print(f"\n  {Color.DIM}[first run] calibrating encoder speed...{Color.RESET}")
             try:
-                cal_vf = _main_chain(tier_for_cal, target_res, is_portrait,
-                                     target_res > short_side)
+                cal_vf = build_chain(restore_level, enhance_level, target_res,
+                                     is_portrait, target_res > short_side)
                 run_calibration(file_path, cal_vf, target_res)
                 cal = load_calibration()
             except Exception:
                 pass
         if cal_key in cal and duration > 0:
-            est = estimate_time(duration, passes, target_res, cal)
+            est = estimate_time(duration, 1, target_res, cal)
             if est:
-                label = f"{passes} pass{'es' if passes > 1 else ''} at {target_res}p"
-                print(f"  {Color.DIM}Estimated time: {est}  ({label}){Color.RESET}")
+                print(f"  {Color.DIM}Estimated time: {est}  (at {target_res}p){Color.RESET}")
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         t0  = time.time()
-        out = enhance(file_path, level=level, preset=preset,
-                      user_filters=secret_filters,
-                      passes=passes, target_res=target_res,
-                      ceiling=0 if is_high_res else None, out_dir=UPRES_DEST)
+        out = enhance(file_path, restore_level=restore_level,
+                      enhance_level=enhance_level, target_res=target_res,
+                      out_dir=UPRES_DEST)
         elapsed = time.time() - t0
         try:
             update_calibration(target_res, elapsed, duration)
@@ -323,7 +298,8 @@ def action_batch_folder(skip_prompts: bool = False):
     if confirm not in ('y', 'yes'):
         return
 
-    passes = enxgui.prompt_passes(skip_prompts)
+    restore_level = enxgui.prompt_restore(skip_prompts)
+    enhance_level = enxgui.prompt_enhance(skip_prompts)
 
     success = 0
     failed = 0
@@ -336,8 +312,9 @@ def action_batch_folder(skip_prompts: bool = False):
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
 
-            out = enhance(file_path, level=2, user_filters=None, passes=passes,
-                          ceiling=ceiling, skip_existing=True)
+            out = enhance(file_path, restore_level=restore_level,
+                          enhance_level=enhance_level, ceiling=ceiling,
+                          skip_existing=True)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
             success += 1
         except Exception as e:
@@ -415,7 +392,8 @@ def action_channel_shorts(skip_prompts: bool = False):
         print(f"\n{Color.YELLOW}Skipped enhancement.{Color.RESET}")
         return
 
-    passes  = enxgui.prompt_passes(skip_prompts)
+    restore_level = enxgui.prompt_restore(skip_prompts)
+    enhance_level = enxgui.prompt_enhance(skip_prompts)
     success = 0
     failed  = 0
 
@@ -426,8 +404,9 @@ def action_channel_shorts(skip_prompts: bool = False):
         try:
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
-            out = enhance(file_path, level=2, user_filters=None, passes=passes,
-                          ceiling=ceiling, out_dir=upres_dir, keep_original=True,
+            out = enhance(file_path, restore_level=restore_level,
+                          enhance_level=enhance_level, ceiling=ceiling,
+                          out_dir=upres_dir, keep_original=True,
                           skip_existing=True)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
             success += 1

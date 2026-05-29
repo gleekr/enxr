@@ -22,7 +22,11 @@ from config.settings import (DEFAULT_DEST, BATCH_OG, BATCH_WORKERS,
 # Single source of truth -- _yt_opts and batch _dl_one both extend this.
 # Changes here apply everywhere.
 _DL_BASE: dict[str, Any] = {
-    "format":                        "bestvideo+bestaudio/best",
+    # Video quality is the priority. Prefer best video + best audio merged;
+    # if no separate audio (or merge impossible), take the best video-only
+    # stream; only then fall back to the best pre-muxed format. A silent but
+    # higher-resolution video beats a lower-resolution one with sound.
+    "format":                        "bv*+ba/bv*/b",
     "merge_output_format":           "mp4",
     "concurrent_fragment_downloads": 16,
     "buffersize":                    16 * 1024,      # int required (not "16K") via Python API

@@ -13,11 +13,11 @@ import os, sys, re
 
 import time
 
-from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier, _main_chain
+from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier
 from config.settings import UPSCALE_CEILING, UPSCALE_STEPS
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
-from filters.presets import EnhancePreset, SECRET_FILTERS
+from filters.presets import build_chain
 
 
 class Color:
@@ -106,154 +106,91 @@ def _print_streams_detected(w: int, h: int, short_side: int,
           f"{orientation}){Color.RESET}")
 
 
-def _print_why_skip(short_side: int, ceiling: int = UPSCALE_CEILING) -> None:
-    print(f"\n{Color.YELLOW}! Source is {short_side}p (at ceiling){Color.RESET}")
-    print(f"  Upscaling would degrade quality")
-    print(f"  Enhancement-only mode recommended")
-
-
-def prompt_upscale(skip_prompts: bool = False, is_high_res: bool = False) -> bool:
-    if skip_prompts:
-        return not is_high_res
-    if is_high_res:
-        _print_why_skip(UPSCALE_CEILING)
-        while True:
-            choice = _ask(f"\n{Color.BOLD}Enhancement only? (y/n):{Color.RESET} ").lower()
-            if choice in ('y', 'n'):
-                return choice == 'y'
-            print("  invalid, enter y or n (or 'back')")
-    print(f"\n{Color.BOLD}Upscale this file?{Color.RESET}")
-    while True:
-        choice = _ask("  (yes/no): ").lower()
-        if choice in ('yes', 'y'):   return True
-        if choice in ('no',  'n'):   return False
-        print("  invalid, enter yes or no (or 'back')")
-
-
-def prompt_level(skip_prompts: bool = False) -> int:
+def prompt_resolution(options: list, short_side: int,
+                      skip_prompts: bool = False) -> int:
+    """Prompt 1 -- target resolution based on source. Returns target short-side.
+    If the source is at/above the ceiling, the only option is source (no scale).
     """
-    Prompt for quality tier override.
-    Returns tier 1-5, or None for auto-detect, or 0 to skip.
-    """
-    if skip_prompts:
-        return None  # auto
-
-    print(f"\n{Color.BOLD}Quality tier:{Color.RESET} {Color.DIM}(enter for auto-detect){Color.RESET}")
-    print("  auto - detect from source bitrate")
-    print("  1    - excellent  (sharpen only)")
-    print("  2    - good       (light restore)")
-    print("  3    - fair       (standard, typical YT)")
-    print("  4    - poor       (aggressive restore)")
-    print("  5    - broken     (max restore)")
-    print("  0    - skip enhancement")
-
-    while True:
-        choice = _ask(f"{Color.BOLD}Tier:{Color.RESET} ")
-        if choice == "":
-            return None
-        if choice in ("0", "1", "2", "3", "4", "5"):
-            return int(choice)
-        print("  invalid, enter 0-5, enter for auto (or 'back')")
-
-
-def prompt_target_res(options: list, skip_prompts: bool = False) -> int:
-    """Prompt user to pick target resolution. Returns target resolution integer."""
-    if skip_prompts:
-        return options[-1]['target']
     recommended = options[-1]['target']
-    print(f"\n{Color.BOLD}Target resolution:{Color.RESET}")
+    if skip_prompts:
+        return recommended
+    if len(options) == 1:                       # source at/above ceiling
+        print(f"\n{Color.BOLD}Resolution:{Color.RESET} "
+              f"{Color.DIM}source {short_side}p (already at ceiling, no upscale){Color.RESET}")
+        return options[0]['target']
+    print(f"\n{Color.BOLD}1. Resolution:{Color.RESET} "
+          f"{Color.DIM}(source {short_side}p){Color.RESET}")
+    print(f"  0 - source {short_side}p {Color.DIM}(no upscale){Color.RESET}")
     for i, opt in enumerate(options):
-        star = f"  {Color.DIM}(recommended){Color.RESET}" if opt['target'] == recommended else ""
+        star = f"  {Color.DIM}(best){Color.RESET}" if opt['target'] == recommended else ""
         print(f"  {i + 1} - {opt['label']}{star}")
     while True:
-        choice = _ask(
-            f"{Color.BOLD}Target (1-{len(options)}, enter for {recommended}p):{Color.RESET} "
-        )
+        choice = _ask(f"{Color.BOLD}Choice (0-{len(options)}, enter for {recommended}p):{Color.RESET} ")
         if choice == "":
             return recommended
+        if choice == "0":
+            return short_side
         if choice.isdigit() and 1 <= int(choice) <= len(options):
             return options[int(choice) - 1]['target']
-        print(f"  invalid, enter 1-{len(options)}, enter for default (or 'back')")
+        print(f"  invalid, enter 0-{len(options)}, enter for best (or 'back')")
 
 
-def prompt_passes(skip_prompts: bool = False) -> int:
+def _prompt_level(title: str, lines: list, default: int,
+                  skip_prompts: bool = False) -> int:
+    """Shared 0-5 level prompt. Returns 0-5 (0 = off)."""
     if skip_prompts:
-        return 1
-    print(f"\n{Color.BOLD}Number of passes:{Color.RESET}")
-    print("  1 = single enhancement")
-    print("  2+ = refinement passes (strength auto-reduces each pass)")
+        return default
+    print(f"\n{Color.BOLD}{title}:{Color.RESET} {Color.DIM}(enter for {default}){Color.RESET}")
+    for ln in lines:
+        print(ln)
     while True:
-        choice = _ask(f"{Color.BOLD}Passes (1-4):{Color.RESET} ")
-        if choice.isdigit() and 1 <= int(choice) <= 4:
+        choice = _ask(f"{Color.BOLD}Level (0-5):{Color.RESET} ")
+        if choice == "":
+            return default
+        if choice in ("0", "1", "2", "3", "4", "5"):
             return int(choice)
-        print("  invalid, enter 1-4 (or 'back')")
+        print("  invalid, enter 0-5, enter for default (or 'back')")
 
 
-def _prompt_secret_menu() -> tuple:
-    """Secret preset menu. Returns (None, user_filters list)."""
-    print(f"\n{Color.DIM}[secret menu]{Color.RESET}")
-    print("  a - unsharp (moderate, no deblock/deband)")
-    print("  b - unsharp (aggressive, frequency detail)")
-    print("  c - max deblock + deband (heavy cleanup)")
-    print("  d - deflicker only")
-    print("  e - custom filter string (advanced)")
-    while True:
-        choice = _ask(f"{Color.BOLD}:{Color.RESET} ").lower()
-        if choice in ('a', 'b', 'c', 'd'):
-            return (None, list(SECRET_FILTERS[choice]))
-        if choice == 'e':
-            fstr = _ask(f"{Color.BOLD}filter string:{Color.RESET} ")
-            if fstr:
-                return (None, [f.strip() for f in fstr.split(',')])
-            print("  enter a filter string")
-        else:
-            print("  enter a, b, c, d, e (or 'back')")
+def prompt_restore(skip_prompts: bool = False, suggested: int = 2) -> int:
+    """Prompt 2 -- restore (deblock/deband) strength 0-5. suggested = auto tier."""
+    return _prompt_level(
+        "2. Restore level",
+        ["  0 - none",
+         "  1 - light",
+         "  2 - mild       (clean source)",
+         "  3 - standard   (typical YT)",
+         "  4 - aggressive (compressed)",
+         "  5 - max        (broken source)"],
+        default=max(0, min(5, suggested)),
+        skip_prompts=skip_prompts,
+    )
 
 
-def prompt_preset(skip_prompts: bool = False) -> tuple:
-    """
-    Show named preset menu (multi-pass only).
-    Returns (EnhancePreset | None, user_filters | None).
-    """
-    if skip_prompts:
-        return (EnhancePreset.CLEAN, None)
-    preset_map = {
-        '1': EnhancePreset.CLEAN,
-        '2': EnhancePreset.RESTORE,
-        '3': EnhancePreset.SHARP,
-        '4': EnhancePreset.CINEMATIC,
-        '5': EnhancePreset.DEEP_CLEAN,
-        '6': EnhancePreset.STABILIZE,
-    }
-    print(f"\n{Color.BOLD}Enhancement preset:{Color.RESET}")
-    print("  1 - Clean       (deblock + deband, safe)")
-    print("  2 - Restore     (+ light denoise, typical YT)")
-    print("  3 - Sharp       (sharpening focus)")
-    print("  4 - Cinematic   (color + tone)")
-    print("  5 - Deep Clean  (max artifact removal, slow)")
-    print("  6 - Stabilize   (deshake + deflicker)")
-    print(f"  {Color.DIM}secret..        (type 'x'){Color.RESET}")
-    while True:
-        choice = _ask(f"{Color.BOLD}Preset:{Color.RESET} ").lower()
-        if choice in preset_map:
-            return (preset_map[choice], None)
-        if choice in ('x', 'secret'):
-            return _prompt_secret_menu()
-        print("  invalid, enter 1-6, 'x' for secret menu (or 'back')")
+def prompt_enhance(skip_prompts: bool = False, default: int = 3) -> int:
+    """Prompt 3 -- enhance (sharpen) strength 0-5."""
+    return _prompt_level(
+        "3. Enhance level",
+        ["  0 - none",
+         "  1 - subtle",
+         "  2 - light",
+         "  3 - standard",
+         "  4 - strong",
+         "  5 - max sharp"],
+        default=default,
+        skip_prompts=skip_prompts,
+    )
 
 
 def _parse_gui_args(args: list) -> tuple:
     path = None
-    passes_override = None
     skip_prompts_flag = False
-    for i, arg in enumerate(args):
+    for arg in args:
         if arg == '--skip':
             skip_prompts_flag = True
-        elif arg == '--passes' and i + 1 < len(args):
-            passes_override = int(args[i + 1])
         elif not arg.startswith('--') and path is None:
             path = arg
-    return path, passes_override, skip_prompts_flag
+    return path, skip_prompts_flag
 
 
 def main() -> None:
@@ -262,7 +199,7 @@ def main() -> None:
         print(__doc__)
         sys.exit(0 if args else 1)
 
-    path, passes_override, skip_prompts_flag = _parse_gui_args(args)
+    path, skip_prompts_flag = _parse_gui_args(args)
 
     if not path:
         print(f"{Color.RED}error: no input file specified{Color.RESET}", file=sys.stderr)
@@ -283,32 +220,10 @@ def main() -> None:
 
         _print_streams_detected(w, h, short_side, is_portrait, options, tier)
 
-        is_high_res = (short_side >= UPSCALE_CEILING)
-
-        should_upscale = prompt_upscale(skip_all_prompts, is_high_res)
-        if not should_upscale:
-            print(f"\n{Color.YELLOW}Skipping enhancement.{Color.RESET}")
-            sys.exit(0)
-
-        level = prompt_level(skip_all_prompts)
-        if level == 0:
-            print(f"\n{Color.YELLOW}Skipped.{Color.RESET}")
-            sys.exit(0)
-
-        # Enhancement-only (high-res source): lock to source, 1 pass, no prompts
-        if is_high_res:
-            target_res    = short_side
-            passes        = 1
-            preset        = None
-            secret_filters = None
-        else:
-            target_res = prompt_target_res(options, skip_all_prompts)
-            passes     = passes_override if passes_override else prompt_passes(skip_all_prompts)
-            if passes > 1:
-                preset, secret_filters = prompt_preset(skip_all_prompts)
-            else:
-                preset        = None
-                secret_filters = None
+        # 3 prompts: resolution -> restore -> enhance
+        target_res    = prompt_resolution(options, short_side, skip_all_prompts)
+        restore_level = prompt_restore(skip_all_prompts, suggested=tier)
+        enhance_level = prompt_enhance(skip_all_prompts)
 
         # Render time estimate / calibration
         duration = get_duration(path)
@@ -317,24 +232,21 @@ def main() -> None:
         if cal_key not in cal:
             print(f"\n  {Color.DIM}[first run] calibrating encoder speed...{Color.RESET}")
             try:
-                cal_vf = _main_chain(tier, target_res, is_portrait,
-                                     target_res > short_side)
+                cal_vf = build_chain(restore_level, enhance_level, target_res,
+                                     is_portrait, target_res > short_side)
                 run_calibration(path, cal_vf, target_res)
                 cal = load_calibration()
             except Exception:
                 pass
         if cal_key in cal and duration > 0:
-            est = estimate_time(duration, passes, target_res, cal)
+            est = estimate_time(duration, 1, target_res, cal)
             if est:
-                label = f"{passes} pass{'es' if passes > 1 else ''} at {target_res}p"
-                print(f"  {Color.DIM}Estimated time: {est}  ({label}){Color.RESET}")
+                print(f"  {Color.DIM}Estimated time: {est}  (at {target_res}p){Color.RESET}")
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         t0  = time.time()
-        out = enhance(path, level=level, preset=preset,
-                      user_filters=secret_filters,
-                      passes=passes, target_res=target_res,
-                      ceiling=0 if is_high_res else None)
+        out = enhance(path, restore_level=restore_level, enhance_level=enhance_level,
+                      target_res=target_res)
         elapsed = time.time() - t0
         try:
             update_calibration(target_res, elapsed, duration)
