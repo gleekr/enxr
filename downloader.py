@@ -30,6 +30,7 @@ _DL_BASE: dict[str, Any] = {
     "throttledratelimit":            100 * 1024,     # re-fetch fragment if speed drops below 100 KB/s
     "socket_timeout":                30,
     "noplaylist":                    True,           # safety -- callers set False when needed
+    "extractor_args":               {"youtube": {"player_client": ["web"]}},
 }
 
 _HANDLE_RE  = re.compile(r'/@([^/?#]+)')
