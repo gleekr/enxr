@@ -70,7 +70,9 @@ def _detect_playlist(url: str) -> tuple[bool, int]:
     """Flat probe -- returns (is_playlist, count).
     Fast: no download, just metadata. Returns (False, 0) on any error."""
     try:
-        with yt_dlp.YoutubeDL({"quiet": True, "extract_flat": True, "noplaylist": False}) as ydl:  # type: ignore[arg-type]
+        probe_opts = {"quiet": True, "extract_flat": True, "noplaylist": False,
+                      "extractor_args": {"youtube": {"player_client": ["ios", "tv"]}}}
+        with yt_dlp.YoutubeDL(probe_opts) as ydl:  # type: ignore[arg-type]
             info = ydl.extract_info(url, download=False)
         entries = info.get("entries")
         return (True, len(entries)) if entries else (False, 1)
@@ -152,9 +154,14 @@ def download_batch(url: str, dest: str = BATCH_DEST,
     noenx_dir   = os.path.join(channel_dir, "noenx")
     os.makedirs(noenx_dir, exist_ok=True)
 
-    # Flat probe respecting playlist_items filter so count is accurate
+    # Flat probe respecting playlist_items filter so count is accurate.
+    # player_client must match _DL_BASE -- default clients (web/mweb) trigger
+    # the apple-webkit-jsi solver here too, opening the YouTube app at probe time.
     print("[batch] fetching playlist...")
-    flat_opts: dict[str, Any] = {"quiet": True, "extract_flat": True, "noplaylist": False}
+    flat_opts: dict[str, Any] = {
+        "quiet": True, "extract_flat": True, "noplaylist": False,
+        "extractor_args": {"youtube": {"player_client": ["ios", "tv"]}},
+    }
     if playlist_items:
         flat_opts["playlist_items"] = playlist_items
     with yt_dlp.YoutubeDL(flat_opts) as ydl:  # type: ignore[arg-type]
