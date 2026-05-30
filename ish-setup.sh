@@ -17,17 +17,13 @@ echo "http://mirror.math.princeton.edu/pub/alpinelinux/latest-stable/community" 
 echo "[apk] updating repos..."
 apk update
 
-# Install essentials in one batch (faster than individual installs)
-echo "[apk] installing essentials..."
+# Install only project dependencies (one batch for speed)
+echo "[apk] installing dependencies..."
 apk add --no-cache \
     git \
     python3 \
     py3-pip \
-    ffmpeg \
-    curl \
-    wget \
-    nano \
-    github-cli
+    ffmpeg
 
 # Speed up pip (parallel downloads)
 echo "[pip] configuring for speed..."
@@ -44,7 +40,6 @@ pip3 install -q yt-dlp
 
 echo "[OK] iSH setup complete"
 echo ""
-echo "Next steps:"
-echo "  1. gh auth login    # one-time GitHub auth"
-echo "  2. gh repo clone <owner>/<repo> <path>"
+echo "Next: clone enxr"
+echo "  git clone https://github.com/gleekr/enxr.git ~/enxr"
 echo ""
