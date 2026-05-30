@@ -1,0 +1,69 @@
+enxr benchmark - 20260530_102200
+restore=2  enhance=3
+------------------------------------------------------------
+
+URL                                                  dur     dl    enc      x  out MB status
+------------------------------------------------------------------------------------------
+https://www.youtube.com/watch?v=7ap9PLmR-nE            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=fD9LjYBIrB4            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=bTSYMfNE78k            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=S_zxddv92CA            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=JQDPFe6rMBM            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=cTFz3zeeqec            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=RsUwUI2TW7Q            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=puy361HroQc            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=LmowpqV3kUE            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=yra3xPHlVjw            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=DcGY3Ry-1oE            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=plEh57x732Y            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=eJa2D3oJpy8            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=OuYGGYUCaKk            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=z6jfhoRqBQ4            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=Zi3HehX0PB0            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=Fq0ETx2Tfi0            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=Nk4ceW67jLg            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=JMcfczo31Ac            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=71rEHNjSKB0            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=_GOebANEiDU            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=BMpk_NMZzDM            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=_DVrzewozN0         35.9s  11.4s   9.4s   3.8x   7.59MB  OK
+https://www.youtube.com/watch?v=GaRsgA3lVa4            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=bYIgzoQKB50            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=-qCPyqxGwH4            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=yt45qBnFO1U            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=wFsk5vG26PM            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=orFIOnO5sP4            -      -      -      -       -  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=g_OpHlsUh2c            -      -      -      -       -  DOWNLOAD_FAIL
+------------------------------------------------------------------------------------------
+passed: 1/30
+avg encode: 9.4s  avg realtime: 3.8x
+failed URLs:
+  https://www.youtube.com/watch?v=7ap9PLmR-nE  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=fD9LjYBIrB4  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=bTSYMfNE78k  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=S_zxddv92CA  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=JQDPFe6rMBM  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=cTFz3zeeqec  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=RsUwUI2TW7Q  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=puy361HroQc  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=LmowpqV3kUE  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=yra3xPHlVjw  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=DcGY3Ry-1oE  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=plEh57x732Y  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=eJa2D3oJpy8  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=OuYGGYUCaKk  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=z6jfhoRqBQ4  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=Zi3HehX0PB0  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=Fq0ETx2Tfi0  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=Nk4ceW67jLg  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=JMcfczo31Ac  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=71rEHNjSKB0  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=_GOebANEiDU  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=BMpk_NMZzDM  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=GaRsgA3lVa4  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=bYIgzoQKB50  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=-qCPyqxGwH4  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=yt45qBnFO1U  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=wFsk5vG26PM  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=orFIOnO5sP4  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=g_OpHlsUh2c  (DOWNLOAD_FAIL)

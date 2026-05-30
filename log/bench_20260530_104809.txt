@@ -1,0 +1,14 @@
+enxr benchmark - 20260530_104809
+restore=2  enhance=3
+------------------------------------------------------------
+
+URL                                                  dur     dl    enc      x  out MB status
+------------------------------------------------------------------------------------------
+c:/enhxr/testclips/poor_720p.mp4                    20.0s   0.0s  12.0s   1.7x  15.64MB  OK
+c:/enhxr/testclips/broken_360p.mp4                  20.0s   0.0s   6.0s   3.3x   7.45MB  OK
+c:/enhxr/testclips/fair_1080p_banding.mp4           20.0s   0.0s  19.6s   1.0x   0.32MB  OK
+c:/enhxr/testclips/good_1440p.mp4                   20.0s   0.0s  29.0s   0.7x  19.98MB  OK
+c:/enhxr/testclips/fair_480p.mp4                    20.0s   0.0s   7.1s   2.8x   8.65MB  OK
+------------------------------------------------------------------------------------------
+passed: 5/5
+avg encode: 14.7s  avg realtime: 1.9x

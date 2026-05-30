@@ -1,0 +1,19 @@
+enxr benchmark - 20260530_104659
+restore=2  enhance=3
+------------------------------------------------------------
+
+URL                                                  dur     dl    enc      x  out MB status
+------------------------------------------------------------------------------------------
+testclipspoor_720p.mp4                                 -      -      -      -       -  DOWNLOAD_FAIL
+testclipsbroken_360p.mp4                               -      -      -      -       -  DOWNLOAD_FAIL
+testclipsfair_1080p_banding.mp4                        -      -      -      -       -  DOWNLOAD_FAIL
+testclipsgood_1440p.mp4                                -      -      -      -       -  DOWNLOAD_FAIL
+testclipsfair_480p.mp4                                 -      -      -      -       -  DOWNLOAD_FAIL
+------------------------------------------------------------------------------------------
+passed: 0/5
+failed URLs:
+  testclipspoor_720p.mp4  (DOWNLOAD_FAIL)
+  testclipsbroken_360p.mp4  (DOWNLOAD_FAIL)
+  testclipsfair_1080p_banding.mp4  (DOWNLOAD_FAIL)
+  testclipsgood_1440p.mp4  (DOWNLOAD_FAIL)
+  testclipsfair_480p.mp4  (DOWNLOAD_FAIL)

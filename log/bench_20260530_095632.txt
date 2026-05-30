@@ -1,0 +1,19 @@
+enxr benchmark — 20260530_095632
+restore=2  enhance=3
+------------------------------------------------------------
+
+URL                                                  dur     dl    enc      x  out MB status
+------------------------------------------------------------------------------------------
+https://www.youtube.com/watch?v=vtrzIG9CfFc            —      —      —      —       —  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=nqye02H_H6I            —      —      —      —       —  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=FTGYHASooHU            —      —      —      —       —  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=LBNO84OzATE            —      —      —      —       —  DOWNLOAD_FAIL
+https://www.youtube.com/watch?v=4LTcV-0PaOw            —      —      —      —       —  DOWNLOAD_FAIL
+------------------------------------------------------------------------------------------
+passed: 0/5
+failed URLs:
+  https://www.youtube.com/watch?v=vtrzIG9CfFc  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=nqye02H_H6I  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=FTGYHASooHU  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=LBNO84OzATE  (DOWNLOAD_FAIL)
+  https://www.youtube.com/watch?v=4LTcV-0PaOw  (DOWNLOAD_FAIL)
