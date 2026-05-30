@@ -4,4 +4,4 @@
 
 echo "http://mirror.math.princeton.edu/pub/alpinelinux/latest-stable/main" > /etc/apk/repositories
 echo "http://mirror.math.princeton.edu/pub/alpinelinux/latest-stable/community" >> /etc/apk/repositories
-apk update && apk add --no-cache git python3 py3-pip ffmpeg && pip3 install -q yt-dlp && echo "[OK] ready"
+apk update && apk add --no-cache git python3.11 py3.11-pip ffmpeg && pip3.11 install -q yt-dlp && echo "[OK] ready"
