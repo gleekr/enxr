@@ -13,7 +13,7 @@ Usage:
                                [--res 720|1080|1440] [--source]
 """
 
-import os, sys, subprocess, json, time
+import os, sys, subprocess, json, time, platform
 
 from config.settings import SOURCE_CEILING
 from filters.presets import build_chain
@@ -79,6 +79,35 @@ def _detect_tier(path: str, w: int, h: int) -> int:
         return 5
     except Exception:
         return 3
+
+
+# ── encoder strategy ──────────────────────────────────────────────────────────
+
+def _get_encoder_chain() -> list:
+    """Return OS-specific encoder chain, hardware-first."""
+    os_name = platform.system()
+
+    strategies = {
+        "Darwin": ["h264_videotoolbox", "hevc_videotoolbox", "libx264"],
+        "Windows": ["h264_nvenc", "h264_qsv", "libx264"],
+        "Linux": ["libx264", "libx265", "libvpx", "libaom"],
+        "Android": ["mediacodec_h264", "libx264"],
+    }
+
+    chain = strategies.get(os_name, ["libx264"])
+    print(f"[ffmpeg] {os_name} encoder chain: {' > '.join(chain)}")
+    return chain
+
+
+def _encoder_args(codec: str) -> list:
+    """Return codec-specific FFmpeg args (e.g., preset, crf for software encoders)."""
+    if codec in ("libx264", "libx265"):
+        return ["-preset", "fast", "-crf", "23"]
+    if codec == "libvpx":
+        return ["-deadline", "good", "-cpu-used", "4", "-crf", "30"]
+    if codec == "libaom":
+        return ["-cpu-used", "4", "-crf", "30"]
+    return []
 
 
 # ── encoder ───────────────────────────────────────────────────────────────────
@@ -163,9 +192,7 @@ def _ffmpeg_errors(stderr: str) -> str:
 
 def _encode(path: str, tmp_path: str, vf: str, progress_cb=None) -> None:
     """
-    Encode with h264_videotoolbox (hardware H.264) first, then
-    hevc_videotoolbox (hardware H.265), then libx264 (software, dev/Windows).
-    Raises RuntimeError if all fail.
+    Encode using OS-specific encoder chain (hardware-first).
     -hwaccel none forces software decode -- required for AV1/non-native codecs.
     Audio optional (0:a:0?) and transcoded to aac. Metadata always stripped.
     """
@@ -180,27 +207,24 @@ def _encode(path: str, tmp_path: str, vf: str, progress_cb=None) -> None:
         "-map_metadata", "-1",
     ]
 
-    ok, err = _try_encode(base_args + ["-c:v", "h264_videotoolbox", tmp_path], tmp_path,
-                          progress_cb)
-    if ok:
-        return
-    log_error("h264_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
+    encoder_chain = _get_encoder_chain()
+    last_error = None
 
-    ok, err = _try_encode(base_args + ["-c:v", "hevc_videotoolbox", tmp_path], tmp_path,
-                          progress_cb)
-    if ok:
-        print("[ffmpeg] h264_videotoolbox unavailable, used hevc_videotoolbox")
-        return
-    log_error("hevc_videotoolbox", RuntimeError(_ffmpeg_errors(err)))
+    for codec in encoder_chain:
+        codec_args = _encoder_args(codec)
+        cmd = base_args + ["-c:v", codec] + codec_args + [tmp_path]
 
-    ok, err = _try_encode(base_args + ["-c:v", "libx264", tmp_path], tmp_path, progress_cb)
-    if ok:
-        print("[ffmpeg] VideoToolbox unavailable, fell back to libx264")
-        return
+        ok, err = _try_encode(cmd, tmp_path, progress_cb)
+        if ok:
+            if codec != encoder_chain[0]:
+                print(f"[ffmpeg] {encoder_chain[0]} unavailable, used {codec}")
+            return
+        last_error = _ffmpeg_errors(err)
+        log_error(codec, RuntimeError(last_error))
 
     raise RuntimeError(
-        "no compatible encoder found -- "
-        "h264_videotoolbox, hevc_videotoolbox, and libx264 all failed"
+        f"no compatible encoder found -- {' > '.join(encoder_chain)} all failed. "
+        f"last error: {last_error}"
     )
 
 

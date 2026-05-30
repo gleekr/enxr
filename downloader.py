@@ -123,6 +123,42 @@ def _channel_name_from_url(url: str) -> str:
     return _SLUG_CLEAN.sub('_', slug) or 'batch'
 
 
+def _parse_selection(selection_str: str, total: int) -> list[int]:
+    """Parse selection string like '3,2,7,23-30,25-59' into sorted unique indices (0-based)."""
+    indices = set()
+    for part in selection_str.split(','):
+        part = part.strip()
+        if '-' in part:
+            try:
+                start, end = part.split('-')
+                start, end = int(start.strip()), int(end.strip())
+                for i in range(start, end + 1):
+                    if 1 <= i <= total:
+                        indices.add(i - 1)
+            except ValueError:
+                pass
+        else:
+            try:
+                i = int(part)
+                if 1 <= i <= total:
+                    indices.add(i - 1)
+            except ValueError:
+                pass
+    return sorted(indices)
+
+
+def _filter_entries_by_type(entries: list, filter_type: str) -> list:
+    """Filter entries by shorts or videos. filter_type: 'shorts', 'videos', or 'all'."""
+    if filter_type == 'all':
+        return entries
+    is_shorts = lambda e: (e.get('duration', 0) or 0) <= 60
+    if filter_type == 'shorts':
+        return [e for e in entries if is_shorts(e)]
+    if filter_type == 'videos':
+        return [e for e in entries if not is_shorts(e)]
+    return entries
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 def download(source: str, dest: str = DEFAULT_DEST) -> str:
@@ -266,6 +302,143 @@ def download_batch(url: str, dest: str = BATCH_OG,
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
+# ── Interactive channel selector ──────────────────────────────────────────────
+
+def download_channel_interactive(url: str, dest: str = BATCH_OG) -> tuple[list[str], list[int]]:
+    """
+    Interactive channel browser with selection options.
+    Returns (downloaded_paths, failed_indices).
+    """
+    print("\n[channel] fetching metadata...")
+    flat_opts = {
+        "quiet": True, "extract_flat": True, "noplaylist": False,
+        "extractor_args": _client_args(YT_PLAYER_CLIENT),
+    }
+    with yt_dlp.YoutubeDL(flat_opts) as ydl:  # type: ignore[arg-type]
+        info = ydl.extract_info(url, download=False)
+    entries = sorted(info.get("entries") or [info],
+                     key=lambda e: e.get("view_count") or 0, reverse=True)
+
+    print(f"\n[channel] {len(entries)} total videos found\n")
+    print("Filter by:")
+    print("  1. First X (shorts only)")
+    print("  2. Custom ranges (e.g., 3,2,7,23-30)")
+    print("  3. All shorts")
+    print("  4. All videos")
+    print("  5. All (shorts + videos)")
+
+    choice = input("\nSelect [1-5]: ").strip()
+
+    filter_type = 'shorts'
+    selection = None
+
+    if choice == '1':
+        count = input("First how many? [default 60]: ").strip()
+        count = int(count) if count.isdigit() else 60
+        selection = list(range(min(count, len(entries))))
+    elif choice == '2':
+        ranges = input("Indices (e.g., 3,2,7,23-30): ").strip()
+        selection = _parse_selection(ranges, len(entries))
+    elif choice == '3':
+        filter_type = 'shorts'
+        selection = list(range(len(entries)))
+    elif choice == '4':
+        filter_type = 'videos'
+        selection = list(range(len(entries)))
+    elif choice == '5':
+        filter_type = 'all'
+        selection = list(range(len(entries)))
+    else:
+        selection = list(range(min(60, len(entries))))
+
+    selected_entries = [entries[i] for i in selection if i < len(entries)]
+    filtered_entries = _filter_entries_by_type(selected_entries, filter_type)
+
+    print(f"\n[download] {len(filtered_entries)} video(s) selected\n")
+
+    # Map filtered entries back to original indices for failure reporting
+    original_indices = {id(e): idx + 1 for idx, e in enumerate(selected_entries) if e in filtered_entries}
+
+    channel = _channel_name_from_url(url)
+    channel_dir = os.path.join(dest, channel)
+    os.makedirs(channel_dir, exist_ok=True)
+
+    tmp_dir = tempfile.mkdtemp(prefix="enxr_batch_")
+    counter = [0]
+    lock = threading.Lock()
+    failed_indices = []
+    archive_path = os.path.join(channel_dir, ".dlarchive")
+
+    def _dl_one(entry: Any, orig_idx: int) -> Optional[str]:
+        vid_id = entry.get("id", "")
+        entry_url = (entry.get("webpage_url") or entry.get("url")
+                     or (f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""))
+        if not entry_url:
+            with lock:
+                failed_indices.append(orig_idx)
+            return None
+
+        def _attempt(clients: list) -> Optional[str]:
+            opts = {
+                **_DL_BASE,
+                "outtmpl": os.path.join(tmp_dir, "%(id)s.%(ext)s"),
+                "concurrent_fragment_downloads": BATCH_FRAGMENT_THREADS,
+                "quiet": True,
+                "no_warnings": True,
+                "extractor_args": _client_args(clients),
+                "download_archive": archive_path,
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:  # type: ignore[arg-type]
+                ydl.extract_info(entry_url, download=True)
+            candidates = glob.glob(os.path.join(tmp_dir, f"{vid_id}.*"))
+            return next((c for c in candidates if c.lower().endswith(".mp4")), None)
+
+        try:
+            mp4 = _attempt(YT_PLAYER_CLIENT)
+        except Exception:
+            mp4 = None
+
+        if not mp4:
+            try:
+                mp4 = _attempt(YT_PLAYER_CLIENT_FALLBACK)
+            except Exception:
+                with lock:
+                    failed_indices.append(orig_idx)
+                return None
+
+        if mp4:
+            with lock:
+                counter[0] += 1
+                print(f"  [{counter[0]}/{len(filtered_entries)}] {vid_id}")
+            return mp4
+        return None
+
+    try:
+        tmp_files = []
+        with ThreadPoolExecutor(max_workers=BATCH_WORKERS) as executor:
+            futures = {executor.submit(_dl_one, e, original_indices[id(e)]): i
+                       for i, e in enumerate(filtered_entries)}
+            for future in as_completed(futures):
+                result = future.result()
+                if result:
+                    tmp_files.append(result)
+
+        downloaded = []
+        for tmp_path in sorted(tmp_files):
+            file_id = _rand_id(channel_dir)
+            out_path = os.path.join(channel_dir, f"{file_id}.mp4")
+            shutil.move(tmp_path, out_path)
+            downloaded.append(out_path)
+            print(f"[OK] {channel}/{file_id}.mp4")
+
+        if failed_indices:
+            print(f"\n[!] Failed: {', '.join(map(str, sorted(set(failed_indices))))}")
+
+        return downloaded, sorted(set(failed_indices))
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def main() -> None:
     args = sys.argv[1:]
@@ -274,21 +447,69 @@ def main() -> None:
         sys.exit(0 if args else 1)
 
     errors = []
+    all_downloaded = []
+
     for source in args:
         try:
             if _is_url(source):
+                is_channel = "/shorts" in source.lower() or "/videos" in source.lower()
+                if is_channel:
+                    print(f"\n[channel] {source}")
+                    downloaded, failed = download_channel_interactive(source)
+                    all_downloaded.extend(downloaded)
+                    if failed:
+                        print(f"[warning] {len(failed)} failed: {', '.join(map(str, failed))}")
+                    continue
+
                 is_playlist, count = _detect_playlist(source)
                 if is_playlist:
-                    print(f"[playlist] {count} video(s) detected -- downloading all to {BATCH_OG}")
+                    print(f"\n[playlist] {count} video(s) detected")
                     files, _ = download_batch(source)
+                    all_downloaded.extend(files)
                     for f in files:
                         print(f"[OK] {f}")
                     continue
+
             out = download(source)
             print(f"[OK] {out}")
+            all_downloaded.append(out)
         except Exception as e:
             print(f"[!] {source}\n    {e}", file=sys.stderr)
             errors.append(source)
+
+    if all_downloaded:
+        choice = input(f"\n[enhance] Enhance batch? (Y/N): ").strip().upper()
+
+        if choice == 'Y':
+            print(f"\n[enhance] {len(all_downloaded)} video(s) downloaded")
+            print("  1. All")
+            print("  2. Specify range (e.g., 4-9, 3, 21)")
+            print("  3. Cancel")
+            select = input("\nSelect [1-3]: ").strip()
+
+            to_enhance = None
+            if select == '1':
+                to_enhance = all_downloaded
+            elif select == '2':
+                ranges = input("Indices (e.g., 4-9, 3, 21): ").strip()
+                indices = _parse_selection(ranges, len(all_downloaded))
+                to_enhance = [all_downloaded[i] for i in indices if i < len(all_downloaded)]
+            else:
+                print("[enhance] cancelled")
+                to_enhance = None
+
+            if to_enhance:
+                print(f"\n[enhancing] {len(to_enhance)} video(s)...")
+                try:
+                    from ffmpeg import enhance as enhance_video
+                    for i, path in enumerate(to_enhance, 1):
+                        try:
+                            out = enhance_video(path, restore_level=2, enhance_level=3)
+                            print(f"[{i}/{len(to_enhance)}] {out}")
+                        except Exception as e:
+                            print(f"[!] {path}: {e}", file=sys.stderr)
+                except ImportError:
+                    print("[!] ffmpeg module not found -- skipping enhance")
 
     print(f"\n{len(args) - len(errors)}/{len(args)} completed.")
     sys.exit(1 if errors else 0)
