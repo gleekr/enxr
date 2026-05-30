@@ -18,12 +18,12 @@ echo "[apk] updating repos..."
 apk update
 
 # Install only project dependencies (one batch for speed)
-# Python 3.11 (3.10+)
+# Python 3.10+
 echo "[apk] installing dependencies..."
 apk add --no-cache \
     git \
-    python3.11 \
-    py3.11-pip \
+    python3.10 \
+    py3.10-pip \
     ffmpeg
 
 # Speed up pip (parallel downloads)
@@ -37,7 +37,7 @@ EOF
 
 # Install yt-dlp
 echo "[pip] installing yt-dlp..."
-pip3.11 install -q yt-dlp
+pip3.10 install -q yt-dlp
 
 echo "[OK] iSH setup complete"
 echo ""
