@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, json, subprocess, time
+import os, json, subprocess, time, platform
 
 CALIBRATION_FILE = os.path.expanduser("~/.enxr_calibration.json")
 _CAL_CLIP_SECS   = 3.0
@@ -51,9 +51,16 @@ def run_calibration(path: str, vf: str, resolution: int) -> bool:
         "-c:a", "aac", "-vf", vf,
         "-map_metadata", "-1",
     ]
+    _chains = {
+        "Darwin":  ["h264_videotoolbox", "hevc_videotoolbox", "libx264"],
+        "Windows": ["h264_nvenc", "h264_qsv", "libx264"],
+        "Linux":   ["libx264", "libx265"],
+        "Android": ["mediacodec_h264", "libx264"],
+    }
+    encoders = _chains.get(platform.system(), ["libx264"])
     start = time.time()
     ok = False
-    for encoder in ("h264_videotoolbox", "hevc_videotoolbox"):
+    for encoder in encoders:
         try:
             subprocess.run(base + ["-c:v", encoder, tmp],
                            capture_output=True, check=True)

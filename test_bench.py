@@ -16,7 +16,6 @@ import os, sys, time, datetime, json, subprocess, shutil, tempfile
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from ffmpeg import enhance
-from config.settings import YT_PLAYER_CLIENT, YT_PLAYER_CLIENT_FALLBACK
 
 # -- scrape config -------------------------------------------------------------
 SCRAPE_N      = 5           # default number of clips to benchmark

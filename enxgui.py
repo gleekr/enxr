@@ -14,10 +14,9 @@ import os, sys, re
 import time
 
 from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier
-from config.settings import UPSCALE_CEILING, UPSCALE_STEPS
+from config import UPSCALE_CEILING, UPSCALE_STEPS, build_chain
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
-from filters.presets import build_chain
 
 
 class Color:

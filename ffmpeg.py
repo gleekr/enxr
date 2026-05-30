@@ -15,8 +15,7 @@ Usage:
 
 import os, sys, subprocess, json, time, platform
 
-from config.settings import SOURCE_CEILING
-from filters.presets import build_chain
+from config import SOURCE_CEILING, build_chain
 from logger import log_error, cleanup_tmp
 
 

@@ -19,37 +19,18 @@ Examples:
   SKIP_PROMPTS=1 python3 enxr.py ~/Downloads/video.mp4
 """
 
-import os, sys, re as _re, shutil
+import os, sys, shutil
 
 import time
 
 from downloader import download, download_batch, DEFAULT_DEST
 from ffmpeg import _get_dims, get_ceiling, enhance
-from filters.presets import build_chain
 from logger import log_error
-from config.settings import UPRES_DEST, BATCH_OG, BATCH_HD
+from config import UPRES_DEST, BATCH_OG, BATCH_HD, build_chain
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
 import enxgui
-from enxgui import GoBack
-
-
-class Color:
-    GREEN = '\033[92m'
-    RED = '\033[91m'
-    YELLOW = '\033[93m'
-    CYAN = '\033[96m'
-    WHITE = '\033[97m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    RESET = '\033[0m'
-
-
-def _rl_safe(s: str) -> str:
-    """Wrap ANSI escapes so readline counts cursor width correctly."""
-    if os.name == 'nt':
-        return s
-    return _re.sub(r'(\033\[[0-9;]*m)', r'\001\1\002', s)
+from enxgui import GoBack, Color, _rl_safe
 
 
 def _input(prompt: str) -> str:
