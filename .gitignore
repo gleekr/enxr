@@ -1,5 +1,4 @@
 log/
 __pycache__/
 *.pyc
-token.txt
 .claude/settings.local.json
