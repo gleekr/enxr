@@ -1,32 +1,24 @@
 #!/usr/bin/env python3
 """
-enxr.py - Master orchestrator for download -> enhance workflow
-
-Combines downloader.py and enxgui.py with interactive menu.
-Works standalone or in batch with session flags.
+enxr.py - Video restore & enhance pipeline
 
 Usage:
   python3 enxr.py                 # Interactive menu
-  python3 enxr.py <URL|file>      # Auto-download or load, then enhance
+  python3 enxr.py <URL|file>      # Fetch or load, then enhance
 
 Environment flags (skip prompts for entire session):
   export SKIP_PROMPTS=1
   export SKIP=true
-
-Examples:
-  python3 enxr.py https://youtube.com/watch?v=...
-  python3 enxr.py ~/Documents/0000.mp4
-  SKIP_PROMPTS=1 python3 enxr.py ~/Downloads/video.mp4
 """
 
 import os, sys, shutil
 
 import time
 
-from downloader import download, download_batch, DEFAULT_DEST
+from downloader import download, _is_url, DEFAULT_DEST
 from ffmpeg import _get_dims, get_ceiling, enhance
 from logger import log_error
-from config import UPRES_DEST, BATCH_OG, BATCH_HD, build_chain
+from config import UPRES_DEST, build_chain
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
 import enxgui
@@ -67,41 +59,26 @@ def _check_deps() -> bool:
 
 
 def print_header():
-    """Display welcome header."""
     print(f"\n{Color.CYAN}{'='*60}{Color.RESET}")
-    print(f"{Color.BOLD}  Video Download -> Enhance Workflow{Color.RESET}")
+    print(f"{Color.BOLD}  Video Restore & Enhance{Color.RESET}")
     print(f"{Color.CYAN}{'='*60}{Color.RESET}\n")
 
 
 def print_menu():
-    """Display main menu."""
     print(f"{Color.BOLD}Choose action:{Color.RESET}")
-    print("  1 - Download from URL + Enhance")
-    print("  2 - Load local file + Enhance")
-    print("  3 - Download only (no enhancement)")
-    print("  4 - Enhance only (existing file)")
-    print("  5 - Batch process folder")
-    print("  6 - Download channel Shorts + Enhance")
-    print("  7 - Exit")
+    print("  1 - Load / fetch + Enhance  (URL or local file)")
+    print("  2 - Enhance only (existing file)")
+    print("  3 - Batch process folder")
+    print("  4 - Exit")
     print()
 
 
 def prompt_choice() -> str:
-    """Get menu choice."""
     while True:
-        choice = _input(f"{Color.BOLD}Enter (1-7):{Color.RESET} ")
-        if choice in ('1', '2', '3', '4', '5', '6', '7'):
+        choice = _input(f"{Color.BOLD}Enter (1-4):{Color.RESET} ")
+        if choice in ('1', '2', '3', '4'):
             return choice
-        print(f"  {Color.RED}invalid, enter 1-7{Color.RESET}")
-
-
-def prompt_url() -> str:
-    """Get URL from user."""
-    while True:
-        url = _input(f"{Color.BOLD}Paste URL:{Color.RESET} ")
-        if url.startswith(('http://', 'https://', 'ftp://')):
-            return url
-        print(f"  {Color.RED}invalid URL{Color.RESET}")
+        print(f"  {Color.RED}invalid, enter 1-4{Color.RESET}")
 
 
 def prompt_file(prompt_text: str = "Enter file path") -> str:
@@ -125,44 +102,26 @@ def prompt_folder(prompt_text: str = "Enter folder path") -> str:
 
 
 
-def action_download_enhance(skip_prompts: bool = False):
-    """Action 1: Download + Enhance"""
-    print(f"\n{Color.BOLD}[ACTION 1] Download + Enhance{Color.RESET}")
+def action_fetch_enhance(skip_prompts: bool = False):
+    """Action 1: URL or local file -> Enhance"""
+    print(f"\n{Color.BOLD}[ACTION 1] Load / Fetch + Enhance{Color.RESET}")
 
-    url = prompt_url()
+    source = _input(f"{Color.BOLD}Paste URL or file path:{Color.RESET} ")
 
-    print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
-    try:
-        video_file = download(url, DEFAULT_DEST)
+    if _is_url(source):
+        print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
+        video_file = download(source, DEFAULT_DEST)
+        if not video_file:
+            print(f"{Color.RED}Download failed.{Color.RESET}")
+            return
         print(f"{Color.GREEN}* Downloaded:{Color.RESET} {video_file}")
-    except Exception as e:
-        log_error("download", e, extra=f"url={url}")
-        print(f"{Color.RED}Download failed: {e}{Color.RESET}")
-        return
+    else:
+        video_file = os.path.abspath(os.path.expanduser(source))
+        if not os.path.isfile(video_file):
+            print(f"  {Color.RED}file not found: {video_file}{Color.RESET}")
+            return
 
     action_enhance_file(video_file, skip_prompts)
-
-
-def action_load_enhance(skip_prompts: bool = False):
-    """Action 2: Load local file + Enhance"""
-    print(f"\n{Color.BOLD}[ACTION 2] Load + Enhance{Color.RESET}")
-
-    file_path = prompt_file("Enter local video path")
-    action_enhance_file(file_path, skip_prompts)
-
-
-def action_download_only():
-    """Action 3: Download only"""
-    print(f"\n{Color.BOLD}[ACTION 3] Download Only{Color.RESET}")
-
-    url = prompt_url()
-
-    print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
-    try:
-        video_file = download(url, DEFAULT_DEST)
-        print(f"{Color.GREEN}* Downloaded:{Color.RESET} {video_file}")
-    except Exception as e:
-        print(f"{Color.RED}Download failed: {e}{Color.RESET}")
 
 
 def action_enhance_only(skip_prompts: bool = False):
@@ -309,100 +268,6 @@ def action_batch_folder(skip_prompts: bool = False):
         print(f"{Color.RED}Failed: {failed}{Color.RESET}")
 
 
-def prompt_batch_selection() -> str:
-    """Returns a yt-dlp playlist_items string or None for all."""
-    print(f"\n{Color.CYAN}-------------------------------------------{Color.RESET}")
-    print(f"{Color.BOLD}Select videos:{Color.RESET}")
-    print("  1 - All")
-    print("  2 - First N")
-    print(f"  3 - Specific  {Color.DIM}(e.g. 1,3,6-10,22){Color.RESET}")
-    print(f"{Color.CYAN}-------------------------------------------{Color.RESET}")
-
-    while True:
-        choice = _input(f"{Color.BOLD}Choice (1-3):{Color.RESET} ")
-        if choice == "1":
-            return None
-        elif choice == "2":
-            while True:
-                n = _input(f"{Color.BOLD}How many:{Color.RESET} ")
-                if n.isdigit() and int(n) > 0:
-                    return f"1-{n}"
-                print(f"  {Color.RED}enter a number{Color.RESET}")
-        elif choice == "3":
-            val = _input(f"{Color.BOLD}Indices:{Color.RESET} ")
-            if val:
-                return val
-            print(f"  {Color.RED}enter at least one index{Color.RESET}")
-        else:
-            print(f"  {Color.RED}enter 1, 2, or 3{Color.RESET}")
-
-
-def action_channel_shorts(skip_prompts: bool = False):
-    """Action 6: Download channel Shorts tab + Enhance"""
-    print(f"\n{Color.BOLD}[ACTION 6] Channel Shorts Batch{Color.RESET}")
-    print(f"  {Color.DIM}e.g. https://www.youtube.com/@handle/shorts{Color.RESET}\n")
-
-    url             = prompt_url()
-    playlist_items  = None if skip_prompts else prompt_batch_selection()
-
-    print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
-    try:
-        files, channel_dir = download_batch(url, BATCH_OG, playlist_items)
-    except Exception as e:
-        log_error("channel_shorts_download", e, extra=f"url={url}")
-        print(f"{Color.RED}Download failed: {e}{Color.RESET}")
-        return
-
-    if not files:
-        print(f"{Color.YELLOW}No files downloaded.{Color.RESET}")
-        return
-
-    channel_name = os.path.basename(channel_dir)
-    upres_dir    = os.path.join(BATCH_HD, channel_name)
-    os.makedirs(upres_dir, exist_ok=True)
-
-    print(f"\n{Color.CYAN}-------------------------------------------{Color.RESET}")
-    print(f"{Color.BOLD}Channel:{Color.RESET}    {channel_name}")
-    print(f"{Color.BOLD}Files:{Color.RESET}      {len(files)} downloaded")
-    print(f"{Color.BOLD}batch/og/{Color.RESET}  originals")
-    print(f"{Color.BOLD}batch/hd/{Color.RESET}  enhanced output")
-    print(f"{Color.CYAN}-------------------------------------------{Color.RESET}")
-
-    confirm = _input(f"\n{Color.BOLD}Enhance all? (yes/no):{Color.RESET} ").lower()
-    if confirm not in ('y', 'yes'):
-        print(f"\n{Color.YELLOW}Skipped enhancement.{Color.RESET}")
-        return
-
-    restore_level = enxgui.prompt_restore(skip_prompts)
-    enhance_level = enxgui.prompt_enhance(skip_prompts)
-    success = 0
-    failed  = 0
-
-    print()
-    for file_path in files:
-        filename = os.path.basename(file_path)
-        print(f"{Color.CYAN}Processing: {filename}{Color.RESET}")
-        try:
-            _, _, _, short_side, _ = _get_dims(file_path)
-            ceiling = get_ceiling(short_side)
-            out = enhance(file_path, restore_level=restore_level,
-                          enhance_level=enhance_level, ceiling=ceiling,
-                          out_dir=upres_dir, keep_original=True,
-                          skip_existing=True)
-            print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")
-            success += 1
-        except Exception as e:
-            log_error("channel_shorts_enhance", e, extra=f"file={filename}")
-            print(f"  {Color.RED}x {e}{Color.RESET}")
-            failed += 1
-
-    print(f"\n{Color.CYAN}-------------------------------------------{Color.RESET}")
-    print(f"{Color.GREEN}Done: {success}/{len(files)}{Color.RESET}", end="")
-    if failed:
-        print(f"  {Color.RED}Failed: {failed}{Color.RESET}", end="")
-    print()
-
-
 def main():
     """Main loop."""
     args = sys.argv[1:]
@@ -443,18 +308,12 @@ def main():
             choice = prompt_choice()
 
             if choice == '1':
-                action_download_enhance(skip_prompts)
+                action_fetch_enhance(skip_prompts)
             elif choice == '2':
-                action_load_enhance(skip_prompts)
-            elif choice == '3':
-                action_download_only()
-            elif choice == '4':
                 action_enhance_only(skip_prompts)
-            elif choice == '5':
+            elif choice == '3':
                 action_batch_folder(skip_prompts)
-            elif choice == '6':
-                action_channel_shorts(skip_prompts)
-            elif choice == '7':
+            elif choice == '4':
                 print(f"\n{Color.GREEN}Bye!{Color.RESET}\n")
                 sys.exit(0)
 
@@ -472,7 +331,7 @@ if __name__ == "__main__":
         # the input file's dir, which for batches is a per-channel subfolder --
         # so walk the roots recursively rather than globbing the top level.
         from logger import cleanup_tmp
-        for root in (DEFAULT_DEST, UPRES_DEST, BATCH_OG, BATCH_HD):
+        for root in (DEFAULT_DEST, UPRES_DEST):
             if not os.path.isdir(root):
                 continue
             for dirpath, _, _ in os.walk(root):
