@@ -20,7 +20,7 @@ _SLUG_CLEAN = re.compile(r'[^\w\-]')
 
 def _ytdlp(clients: str | None = None) -> list[str]:
     if clients is None:
-        clients = "mweb" if POT_SERVER_URL else "ios,tv"
+        clients = "mweb" if POT_SERVER_URL else "android"
     args = [
         "yt-dlp",
         "-f", "bv*+ba/bv*/b",
@@ -99,7 +99,7 @@ def download(url: str, dest: str = DEFAULT_DEST) -> str | None:
     os.makedirs(dest, exist_ok=True)
     uid     = f"{random.randint(0, 9999):04d}"
     outtmpl = os.path.join(dest, f"{uid}_%(id)s.%(ext)s")
-    for clients in (("mweb", "ios,tv") if POT_SERVER_URL else ("ios,tv", "web")):
+    for clients in (("mweb", "android") if POT_SERVER_URL else ("android", "ios")):
         cmd = _ytdlp(clients) + ["--no-playlist", "-o", outtmpl, url]
         if subprocess.run(cmd).returncode == 0:
             hits = glob.glob(os.path.join(dest, f"{uid}_*.mp4"))
@@ -187,7 +187,7 @@ def download_channel_interactive(url: str, dest: str = BATCH_OG) -> tuple[list[s
             return None
 
         outtmpl = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-        for clients in (("mweb", "ios,tv") if POT_SERVER_URL else ("ios,tv", "web")):
+        for clients in (("mweb", "android") if POT_SERVER_URL else ("android", "ios")):
             cmd = _ytdlp(clients) + [
                 "--no-playlist", "-o", outtmpl,
                 "--download-archive", archive_path,

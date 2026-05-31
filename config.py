@@ -24,8 +24,8 @@ BATCH_WORKERS          = 20
 BATCH_FRAGMENT_THREADS = 4
 
 # ── YouTube player clients ────────────────────────────────────────────────────
-YT_PLAYER_CLIENT          = ["ios", "tv"]
-YT_PLAYER_CLIENT_FALLBACK = ["web"]
+YT_PLAYER_CLIENT          = ["android"]
+YT_PLAYER_CLIENT_FALLBACK = ["ios"]
 
 # ── Browser cookie source ─────────────────────────────────────────────────────
 def _find_cookie_file() -> str | None:
