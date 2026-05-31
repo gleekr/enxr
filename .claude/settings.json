@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:stackoverflow.com)",
-      "Bash(git restore *)"
+      "Bash(git restore *)",
+      "Bash(git check-ignore *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(python -c \"import os; print\\('on disk:', os.path.exists\\('.claude/settings.json'\\)\\)\")"
     ],
     "deny": [
       "Read(/)",
