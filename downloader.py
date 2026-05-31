@@ -15,13 +15,15 @@ from urllib.parse import urlparse
 
 from config import (DEFAULT_DEST, BATCH_OG, BATCH_WORKERS,
                     BATCH_FRAGMENT_THREADS, YT_PLAYER_CLIENT,
-                    YT_PLAYER_CLIENT_FALLBACK)
+                    YT_PLAYER_CLIENT_FALLBACK, COOKIE_BROWSER, COOKIE_FILE)
 
 
 # ── Shared download settings ──────────────────────────────────────────────────
 # Single source of truth -- _yt_opts and batch _dl_one both extend this.
 # Changes here apply everywhere.
 _DL_BASE: dict[str, Any] = {
+    **({"cookiesfrombrowser": (COOKIE_BROWSER,)} if COOKIE_BROWSER else
+       {"cookiefile": COOKIE_FILE}               if COOKIE_FILE    else {}),
     # Video quality is the priority. Prefer best video + best audio merged;
     # if no separate audio (or merge impossible), take the best video-only
     # stream; only then fall back to the best pre-muxed format. A silent but

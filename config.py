@@ -1,4 +1,4 @@
-import os
+import os, platform
 from enum import Enum
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
@@ -26,6 +26,34 @@ BATCH_FRAGMENT_THREADS = 4
 # ── YouTube player clients ────────────────────────────────────────────────────
 YT_PLAYER_CLIENT          = ["ios", "tv"]
 YT_PLAYER_CLIENT_FALLBACK = ["web"]
+
+# ── Browser cookie source ─────────────────────────────────────────────────────
+COOKIE_FILE_PATH = os.path.expanduser("~/cookies.txt")
+
+def _detect_cookie_browser() -> str | None:
+    """Return the first available browser name for yt-dlp cookiesfrombrowser."""
+    system = platform.system()
+    home   = os.path.expanduser("~")
+    lad    = os.environ.get("LOCALAPPDATA", "")
+
+    candidates = {
+        "safari": {"Darwin":  os.path.join(home, "Library", "Safari")},
+        "brave":  {"Darwin":  os.path.join(home, "Library", "Application Support", "BraveSoftware", "Brave-Browser"),
+                   "Windows": os.path.join(lad,  "BraveSoftware", "Brave-Browser"),
+                   "Linux":   os.path.join(home, ".config", "BraveSoftware", "Brave-Browser")},
+        "chrome": {"Darwin":  os.path.join(home, "Library", "Application Support", "Google", "Chrome"),
+                   "Windows": os.path.join(lad,  "Google", "Chrome"),
+                   "Linux":   os.path.join(home, ".config", "google-chrome")},
+    }
+
+    for browser in ("safari", "brave", "chrome"):
+        path = candidates[browser].get(system)
+        if path and os.path.isdir(path):
+            return browser
+    return None
+
+COOKIE_BROWSER: str | None = _detect_cookie_browser()
+COOKIE_FILE:    str | None = COOKIE_FILE_PATH if (not COOKIE_BROWSER and os.path.isfile(COOKIE_FILE_PATH)) else None
 
 # ── Quality tiers ─────────────────────────────────────────────────────────────
 class QualityTier(Enum):
