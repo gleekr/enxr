@@ -17,9 +17,9 @@ STANDARD_SIZES = [360, 480, 720, 1080, 1440]
 
 # ── Source tier -> upscale ceiling (short side). 0 = already high enough ───────
 SOURCE_CEILING = {
-    360:  720,
-    480:  1080,
-    720:  1440,
+    360:  480,
+    480:  720,
+    720:  1080,
     1080: 1440,
     1440: 0,
 }
