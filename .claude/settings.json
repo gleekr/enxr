@@ -5,7 +5,17 @@
       "Bash(git restore *)",
       "Bash(git check-ignore *)",
       "Bash(echo \"exit=$?\")",
-      "Bash(python -c \"import os; print\\('on disk:', os.path.exists\\('.claude/settings.json'\\)\\)\")"
+      "Bash(python -c \"import os; print\\('on disk:', os.path.exists\\('.claude/settings.json'\\)\\)\")",
+      "Bash(git --no-pager diff downloader.py)",
+      "Bash(Tee-Object -FilePath _d1.txt)",
+      "Bash(Out-Null)",
+      "Bash(Get-Content _d1.txt -Raw)",
+      "Bash(Remove-Item _d1.txt)",
+      "Bash(git stash *)",
+      "Bash(git checkout *)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('downloader.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('enxr.py',encoding='utf-8'\\).read\\(\\)\\); print\\('both parse OK'\\)\")",
+      "Bash(python -c \"import enxr, enxgui, ffmpeg, config, downloader; print\\('imports OK'\\)\")",
+      "Bash(python -c \"print\\(open\\('enxgui.py',encoding='utf-8'\\).read\\(\\)\\)\")"
     ],
     "deny": [
       "Read(/)",
