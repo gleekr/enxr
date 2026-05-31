@@ -85,22 +85,40 @@ def _has_nvidia_gpu() -> bool:
         return False
 
 
+def _available_encoders() -> set:
+    """Names of encoders this ffmpeg build actually supports."""
+    try:
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                           capture_output=True, text=True, timeout=10)
+        out = r.stdout + r.stderr
+        names = set()
+        for line in out.splitlines():
+            parts = line.split()
+            # encoder rows look like: " V..... h264_videotoolbox  ..."
+            if len(parts) >= 2 and parts[0][0:1] == "V":
+                names.add(parts[1])
+        return names
+    except Exception:
+        return set()
+
+
 def _get_encoder_chain() -> list:
-    """OS-specific encoder chain. libx264 is the safe default; a hardware
-    encoder is used only when its GPU is actually present.
-      macOS         -> h264_videotoolbox, then libx264
-      Windows/Linux -> h264_nvenc (only if NVIDIA GPU), then libx264
+    """Pick the encoder chain by what ffmpeg actually has, not the OS string
+    (A-Shell/iSH report unreliable platforms). VideoToolbox is preferred on
+    Apple devices; NVENC when a dedicated NVIDIA GPU is present. libx264 is
+    always the final, guaranteed fallback.
     """
-    os_name = platform.system()
+    have = _available_encoders()
+    chain = []
 
-    if os_name == "Darwin":
-        chain = ["h264_videotoolbox", "libx264"]
-    elif os_name in ("Windows", "Linux"):
-        chain = ["h264_nvenc", "libx264"] if _has_nvidia_gpu() else ["libx264"]
-    else:
-        chain = ["libx264"]
+    if "h264_videotoolbox" in have:
+        chain.append("h264_videotoolbox")
+    elif "h264_nvenc" in have and _has_nvidia_gpu():
+        chain.append("h264_nvenc")
 
-    print(f"[ffmpeg] {os_name} encoder chain: {' > '.join(chain)}")
+    chain.append("libx264")   # always last -- proven everywhere
+
+    print(f"[ffmpeg] encoder chain: {' > '.join(chain)}")
     return chain
 
 
