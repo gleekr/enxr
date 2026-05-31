@@ -3,20 +3,20 @@
     "deny": [
       "Read(/)",
       "Read(/Users/*)",
-      "Read(C:\\)",
       "Read(C:\\Users\\*)",
       "Read(/home/*)",
       "Write(/)",
       "Write(/Users/*)",
-      "Write(C:\\)",
       "Write(C:\\Users\\*)",
       "Write(/home/*)",
       "Edit(/)",
       "Edit(/Users/*)",
-      "Edit(C:\\)",
       "Edit(C:\\Users\\*)",
       "Edit(/home/*)",
       "Bash(*)"
+    ],
+    "allow": [
+      "WebFetch(domain:stackoverflow.com)"
     ]
   },
   "remoteControlAtStartup": true

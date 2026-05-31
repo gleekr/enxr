@@ -9,7 +9,7 @@ Usage:
 import glob, os, shutil, subprocess, sys, tempfile, threading, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from config import BATCH_WORKERS
+from config import BATCH_WORKERS, POT_SERVER_URL
 from downloader import _ytdlp, _probe
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "log")
@@ -48,7 +48,7 @@ def _dl_one(entry: dict, tmp_dir: str) -> str | None:
     if not entry_url:
         return None
     outtmpl = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-    for clients in ("ios,tv", "web"):
+    for clients in (("mweb", "ios,tv") if POT_SERVER_URL else ("ios,tv", "web")):
         cmd = _ytdlp(clients) + ["--no-playlist", "-o", outtmpl, "--quiet", "--no-warnings", entry_url]
         if subprocess.run(cmd).returncode == 0:
             hits = glob.glob(os.path.join(tmp_dir, f"{vid_id}.*"))
@@ -59,7 +59,7 @@ def _dl_one(entry: dict, tmp_dir: str) -> str | None:
 
 def _dl_single(url: str, tmp_dir: str) -> str | None:
     outtmpl = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-    for clients in ("ios,tv", "web"):
+    for clients in (("mweb", "ios,tv") if POT_SERVER_URL else ("ios,tv", "web")):
         cmd = _ytdlp(clients) + ["--no-playlist", "-o", outtmpl, "--quiet", "--no-warnings", url]
         if subprocess.run(cmd).returncode == 0:
             hits = glob.glob(os.path.join(tmp_dir, "*.mp4"))

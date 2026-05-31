@@ -11,14 +11,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 from config import (DEFAULT_DEST, BATCH_OG, BATCH_WORKERS,
-                    COOKIE_BROWSER, COOKIE_FILE)
+                    COOKIE_BROWSER, COOKIE_FILE, POT_SERVER_URL)
 
 _HANDLE_RE  = re.compile(r'/@([^/?#]+)')
 _CHANNEL_RE = re.compile(r'/(?:channel|c)/([^/?#]+)')
 _SLUG_CLEAN = re.compile(r'[^\w\-]')
 
 
-def _ytdlp(clients: str = "ios,tv") -> list[str]:
+def _ytdlp(clients: str | None = None) -> list[str]:
+    if clients is None:
+        clients = "mweb" if POT_SERVER_URL else "ios,tv"
     args = [
         "yt-dlp",
         "-f", "bv*+ba/bv*/b",
@@ -30,6 +32,8 @@ def _ytdlp(clients: str = "ios,tv") -> list[str]:
         "--socket-timeout", "30",
         "--extractor-args", f"youtube:player_client={clients}",
     ]
+    if POT_SERVER_URL:
+        args += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={POT_SERVER_URL}"]
     if COOKIE_BROWSER:
         args += ["--cookies-from-browser", COOKIE_BROWSER]
     elif COOKIE_FILE:
@@ -95,7 +99,7 @@ def download(url: str, dest: str = DEFAULT_DEST) -> str | None:
     os.makedirs(dest, exist_ok=True)
     uid     = f"{random.randint(0, 9999):04d}"
     outtmpl = os.path.join(dest, f"{uid}_%(id)s.%(ext)s")
-    for clients in ("ios,tv", "web"):
+    for clients in (("mweb", "ios,tv") if POT_SERVER_URL else ("ios,tv", "web")):
         cmd = _ytdlp(clients) + ["--no-playlist", "-o", outtmpl, url]
         if subprocess.run(cmd).returncode == 0:
             hits = glob.glob(os.path.join(dest, f"{uid}_*.mp4"))
@@ -153,7 +157,7 @@ def download_channel_interactive(url: str, dest: str = BATCH_OG) -> tuple[list[s
             return None
 
         outtmpl = os.path.join(tmp_dir, "%(id)s.%(ext)s")
-        for clients in ("ios,tv", "web"):
+        for clients in (("mweb", "ios,tv") if POT_SERVER_URL else ("ios,tv", "web")):
             cmd = _ytdlp(clients) + [
                 "--no-playlist", "-o", outtmpl,
                 "--download-archive", archive_path,

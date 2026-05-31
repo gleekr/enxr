@@ -55,6 +55,13 @@ def _detect_cookie_browser() -> str | None:
 COOKIE_BROWSER: str | None = _detect_cookie_browser()
 COOKIE_FILE:    str | None = COOKIE_FILE_PATH if (not COOKIE_BROWSER and os.path.isfile(COOKIE_FILE_PATH)) else None
 
+# ── PO Token server ───────────────────────────────────────────────────────────
+# URL of a running bgutil-ytdlp-pot-provider HTTP server.
+# Windows/macOS: server runs locally  →  "http://127.0.0.1:4416"
+# iOS (A-Shell): point to Windows machine on same network  →  "http://192.168.x.x:4416"
+# Leave None to skip (falls back to ios/tv clients without PO tokens)
+POT_SERVER_URL: str | None = None
+
 # ── Quality tiers ─────────────────────────────────────────────────────────────
 class QualityTier(Enum):
     EXCELLENT = 1
