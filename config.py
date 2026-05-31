@@ -28,7 +28,14 @@ YT_PLAYER_CLIENT          = ["ios", "tv"]
 YT_PLAYER_CLIENT_FALLBACK = ["web"]
 
 # ── Browser cookie source ─────────────────────────────────────────────────────
-COOKIE_FILE_PATH = os.path.expanduser("~/cookies.txt")
+def _find_cookie_file() -> str | None:
+    for p in ("~/cookies.txt", "~/Documents/cookies.txt"):
+        expanded = os.path.expanduser(p)
+        if os.path.isfile(expanded):
+            return expanded
+    return None
+
+COOKIE_FILE_PATH = _find_cookie_file() or os.path.expanduser("~/cookies.txt")
 
 def _detect_cookie_browser() -> str | None:
     """Return the first available browser name for yt-dlp cookiesfrombrowser."""
