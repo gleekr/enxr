@@ -9,7 +9,7 @@ The goal is to expand this into a comprehensive video enhancement suite. We test
 ## Stack
 
 - `yt-dlp` — downloading (YouTube + many other sites). Player client strategy: ios/tv first (avoids CAPTCHA), web fallback.
-- `FFmpeg` — encode pipeline. Hardware-first encoder chain per OS (NVENC → QSV → libx264 on Windows, VideoToolbox on macOS, libx264 on Linux).
+- `FFmpeg` — encode pipeline. libx264 is the default everywhere; a hardware encoder is used only when its GPU is present (h264_nvenc on Windows/Linux with a dedicated NVIDIA GPU, h264_videotoolbox on macOS). Output forced to yuv420p.
 - Python 3.11 (Windows), 3.10+ required.
 
 ## Files
