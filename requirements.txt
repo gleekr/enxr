@@ -1,4 +1,0 @@
---pre
-yt-dlp
-yt-dlp-get-pot
-bgutil-ytdlp-pot-provider

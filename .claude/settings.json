@@ -1,5 +1,9 @@
 {
   "permissions": {
+    "allow": [
+      "WebFetch(domain:stackoverflow.com)",
+      "Bash(git restore *)"
+    ],
     "deny": [
       "Read(/)",
       "Read(/Users/*)",
@@ -14,9 +18,6 @@
       "Edit(C:\\Users\\*)",
       "Edit(/home/*)",
       "Bash(*)"
-    ],
-    "allow": [
-      "WebFetch(domain:stackoverflow.com)"
     ]
   },
   "remoteControlAtStartup": true
