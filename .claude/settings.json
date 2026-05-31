@@ -16,8 +16,7 @@
       "Edit(/)",
       "Edit(/Users/*)",
       "Edit(C:\\Users\\*)",
-      "Edit(/home/*)",
-      "Bash(*)"
+      "Edit(/home/*)"
     ]
   },
   "remoteControlAtStartup": true
