@@ -107,6 +107,36 @@ def download(url: str, dest: str = DEFAULT_DEST) -> str | None:
     return None
 
 
+def download_batch(url: str, dest: str = BATCH_OG,
+                   playlist_items: str | None = None) -> tuple[list[str], str]:
+    """Non-interactive batch download. playlist_items: yt-dlp selection string or None for all."""
+    channel     = _channel_name_from_url(url)
+    channel_dir = os.path.join(dest, channel)
+    os.makedirs(channel_dir, exist_ok=True)
+    archive_path = os.path.join(channel_dir, ".dlarchive")
+    tmp_dir      = tempfile.mkdtemp(prefix="enxr_batch_")
+
+    try:
+        cmd = _ytdlp() + ["-o", os.path.join(tmp_dir, "%(id)s.%(ext)s"),
+                          "--download-archive", archive_path, "--quiet"]
+        if playlist_items:
+            cmd += ["--playlist-items", playlist_items]
+        cmd.append(url)
+        subprocess.run(cmd)
+
+        downloaded: list[str] = []
+        for tmp_path in sorted(glob.glob(os.path.join(tmp_dir, "*.mp4"))):
+            fid = _rand_id(channel_dir)
+            out = os.path.join(channel_dir, f"{fid}.mp4")
+            shutil.move(tmp_path, out)
+            downloaded.append(out)
+            print(f"[OK] {channel}/{fid}.mp4")
+
+        return downloaded, channel_dir
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
 def download_channel_interactive(url: str, dest: str = BATCH_OG) -> tuple[list[str], list[int]]:
     """Batch download with interactive selection prompt."""
     print("\n[batch] fetching playlist metadata...")
