@@ -12,12 +12,30 @@ UPSCALE_CEILING = 1440
 UPSCALE_STEPS   = [720, 1080, 1440]
 AUTO_DEFAULT_LEVEL = 2
 
-# ── Source -> ceiling mapping ─────────────────────────────────────────────────
+# Standard short-side sizes. Any source snaps to the closest one before lookup.
+STANDARD_SIZES = [360, 480, 720, 1080, 1440]
+
+# ── Source tier -> upscale ceiling (short side). 0 = already high enough ───────
 SOURCE_CEILING = {
-    1440: 0,
+    360:  720,
+    480:  1080,
     720:  1440,
-    0:    1080,
+    1080: 1440,
+    1440: 0,
 }
+
+
+def _snap_standard(short_side: int) -> int:
+    """Snap an arbitrary short side to the closest standard size (ties -> lower)."""
+    return min(STANDARD_SIZES, key=lambda s: (abs(s - short_side), s))
+
+
+def get_ceiling(short_side: int) -> int:
+    """Upscale ceiling for a source, snapped to the nearest standard tier.
+    Returns 0 when the source is already at/above 1440 (no upscale)."""
+    if short_side >= 1440:
+        return 0
+    return SOURCE_CEILING[_snap_standard(short_side)]
 
 # ── Download workers ──────────────────────────────────────────────────────────
 BATCH_WORKERS          = 20

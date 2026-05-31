@@ -15,7 +15,7 @@ Usage:
 
 import os, sys, subprocess, json, time, platform
 
-from config import SOURCE_CEILING, build_chain
+from config import build_chain, get_ceiling
 from logger import log_error, cleanup_tmp
 
 
@@ -40,13 +40,7 @@ def _get_dims(path: str) -> tuple:
         raise FileNotFoundError("ffprobe not found -- is FFmpeg installed and on PATH?")
 
 
-def get_ceiling(short_side: int) -> int:
-    """Derive appropriate upscale ceiling from source resolution."""
-    for threshold in sorted(SOURCE_CEILING.keys(), reverse=True):
-        if short_side >= threshold:
-            return SOURCE_CEILING[threshold]
-    return 720
-
+# get_ceiling is imported from config (single source of truth for the ladder).
 
 
 # ── quality detection ─────────────────────────────────────────────────────────
@@ -82,18 +76,31 @@ def _detect_tier(path: str, w: int, h: int) -> int:
 
 # ── encoder strategy ──────────────────────────────────────────────────────────
 
+def _has_nvidia_gpu() -> bool:
+    """True if a dedicated NVIDIA GPU is present (nvidia-smi lists one)."""
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True, timeout=5)
+        return r.returncode == 0 and "GPU" in r.stdout
+    except Exception:
+        return False
+
+
 def _get_encoder_chain() -> list:
-    """Return OS-specific encoder chain, hardware-first."""
+    """OS-specific encoder chain. libx264 is the safe default; a hardware
+    encoder is used only when its GPU is actually present.
+      macOS   -> h264_videotoolbox, then libx264
+      Windows -> h264_nvenc (only if NVIDIA GPU), then libx264
+      else    -> libx264
+    """
     os_name = platform.system()
 
-    strategies = {
-        "Darwin": ["h264_videotoolbox", "hevc_videotoolbox", "libx264"],
-        "Windows": ["h264_nvenc", "h264_qsv", "libx264"],
-        "Linux": ["libx264", "libx265", "libvpx", "libaom"],
-        "Android": ["mediacodec_h264", "libx264"],
-    }
+    if os_name == "Darwin":
+        chain = ["h264_videotoolbox", "libx264"]
+    elif os_name == "Windows":
+        chain = ["h264_nvenc", "libx264"] if _has_nvidia_gpu() else ["libx264"]
+    else:
+        chain = ["libx264"]
 
-    chain = strategies.get(os_name, ["libx264"])
     print(f"[ffmpeg] {os_name} encoder chain: {' > '.join(chain)}")
     return chain
 
@@ -203,6 +210,7 @@ def _encode(path: str, tmp_path: str, vf: str, progress_cb=None) -> None:
         "-map", "0:a:0?",
         "-c:a", "aac",
         "-vf", vf,
+        "-pix_fmt", "yuv420p",
         "-map_metadata", "-1",
     ]
 

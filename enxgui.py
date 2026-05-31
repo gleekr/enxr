@@ -14,7 +14,8 @@ import os, sys, re
 import time
 
 from ffmpeg import enhance, _get_dims, get_ceiling, _detect_tier
-from config import UPSCALE_CEILING, UPSCALE_STEPS, build_chain
+from config import UPSCALE_STEPS, build_chain
+from config import UPSCALE_CEILING  # noqa: F401  (kept for external/back-compat imports)
 from calibration import (load_calibration, run_calibration, estimate_time,
                          update_calibration, get_duration)
 
@@ -73,11 +74,11 @@ def _format_resolution(w: int, h: int, is_portrait: bool) -> str:
 
 
 def _calculate_upscale_options(short_side: int, is_portrait: bool) -> list:
-    ceiling = UPSCALE_CEILING
-    if short_side >= ceiling:
+    ceiling = get_ceiling(short_side)
+    targets = [t for t in UPSCALE_STEPS if short_side < t <= ceiling] if ceiling else []
+    if not targets:
         return [{"target": short_side, "is_best": True,
                  "label": "Source (enhancement only)"}]
-    targets = [t for t in UPSCALE_STEPS if short_side < t <= ceiling]
     return [{"target": t, "is_best": (t == targets[-1]), "label": f"{t}p"}
             for t in targets]
 
