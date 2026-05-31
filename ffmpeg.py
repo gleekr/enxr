@@ -88,15 +88,14 @@ def _has_nvidia_gpu() -> bool:
 def _get_encoder_chain() -> list:
     """OS-specific encoder chain. libx264 is the safe default; a hardware
     encoder is used only when its GPU is actually present.
-      macOS   -> h264_videotoolbox, then libx264
-      Windows -> h264_nvenc (only if NVIDIA GPU), then libx264
-      else    -> libx264
+      macOS         -> h264_videotoolbox, then libx264
+      Windows/Linux -> h264_nvenc (only if NVIDIA GPU), then libx264
     """
     os_name = platform.system()
 
     if os_name == "Darwin":
         chain = ["h264_videotoolbox", "libx264"]
-    elif os_name == "Windows":
+    elif os_name in ("Windows", "Linux"):
         chain = ["h264_nvenc", "libx264"] if _has_nvidia_gpu() else ["libx264"]
     else:
         chain = ["libx264"]
