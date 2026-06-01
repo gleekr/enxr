@@ -122,10 +122,21 @@ def _get_encoder_chain() -> list:
     return chain
 
 
-def _encoder_args(codec: str) -> list:
-    """Return codec-specific FFmpeg args (e.g., preset, crf for software encoders)."""
+def _encoder_args(codec: str, denoise_preset: str = "med") -> list:
+    """Return codec-specific FFmpeg args, tuned by denoise preset.
+
+    Presets map to: very_fast (batch) → fast (clean) → med (balanced) → slow (quality)
+    """
     if codec in ("libx264", "libx265"):
-        return ["-preset", "fast", "-crf", "23"]
+        # Tune preset + CRF by denoise tier
+        preset_map = {
+            "very_fast": ("ultrafast", "28"),
+            "fast":      ("fast", "26"),
+            "med":       ("medium", "23"),
+            "slow":      ("slow", "22"),
+        }
+        preset, crf = preset_map.get(denoise_preset, ("medium", "23"))
+        return ["-preset", preset, "-crf", crf, "-profile:v", "main", "-g", "250"]
     if codec == "libvpx":
         return ["-deadline", "good", "-cpu-used", "4", "-crf", "30"]
     if codec == "libaom":
@@ -213,11 +224,12 @@ def _ffmpeg_errors(stderr: str) -> str:
     return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() if lines else "encode failed")
 
 
-def _encode(path: str, tmp_path: str, vf: str, progress_cb=None) -> None:
+def _encode(path: str, tmp_path: str, vf: str, denoise_preset: str = "med", progress_cb=None) -> None:
     """
     Encode using OS-specific encoder chain (hardware-first).
     -hwaccel none forces software decode -- required for AV1/non-native codecs.
     Audio optional (0:a:0?) and transcoded to aac. Metadata always stripped.
+    denoise_preset tunes encoder settings (very_fast/fast/med/slow).
     """
     base_args = [
         "ffmpeg", "-y",
@@ -235,7 +247,7 @@ def _encode(path: str, tmp_path: str, vf: str, progress_cb=None) -> None:
     last_error = None
 
     for codec in encoder_chain:
-        codec_args = _encoder_args(codec)
+        codec_args = _encoder_args(codec, denoise_preset)
         cmd = base_args + ["-c:v", codec] + codec_args + [tmp_path]
 
         ok, err = _try_encode(cmd, tmp_path, progress_cb)
@@ -321,7 +333,7 @@ def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
         progress_cb(f"__stage__:enhance:{stage} denoise={denoise_preset} e{enhance_level}")
 
     try:
-        _encode(path, tmp_enc, vf, progress_cb=progress_cb)
+        _encode(path, tmp_enc, vf, denoise_preset=denoise_preset, progress_cb=progress_cb)
         os.replace(tmp_enc, out_path)
     except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError) as e:
         log_error("enhance", e, extra=f"file={os.path.basename(path)}")
