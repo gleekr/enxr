@@ -9,10 +9,10 @@ Encodes the video with multiple restore/enhance combinations.
 Outputs all results to output_dir with a manifest file.
 """
 
-import sys, os, json, time
+import sys, os, json, time, subprocess
 from pathlib import Path
 
-from ffmpeg import enhance, _get_dims, get_ceiling
+from ffmpeg import enhance, _get_dims, get_ceiling, get_duration
 from config import UPRES_DEST, build_chain
 
 
@@ -25,6 +25,18 @@ TEST_COMBOS = [
     (2, 3), (3, 2), (3, 3),  # moderate
     (4, 2), (3, 4),  # heavier
 ]
+
+
+def capture_frame(video_file: str, output_png: str, timestamp: float = 2.0) -> bool:
+    """Extract a frame from video at timestamp and save as PNG."""
+    try:
+        subprocess.run([
+            "ffmpeg", "-y", "-ss", str(timestamp), "-i", video_file,
+            "-vframes", "1", "-q:v", "2", output_png
+        ], capture_output=True, timeout=10, check=True)
+        return True
+    except Exception:
+        return False
 
 
 def main():
@@ -65,13 +77,19 @@ def main():
         t0 = time.time()
 
         try:
-            enhance(input_file, restore_level=restore, enhance_level=enhance_lvl,
-                   target_res=target_res, out_dir=output_dir)
+            actual_output = enhance(input_file, restore_level=restore, enhance_level=enhance_lvl,
+                                   target_res=target_res, out_dir=output_dir)
             elapsed = time.time() - t0
+
+            # Capture frame for quick comparison
+            frame_png = os.path.join(output_dir, f"{base_name}_{restore}-{enhance_lvl}.png")
+            capture_frame(actual_output, frame_png, timestamp=2.0)
+
             results.append({
                 "restore": restore,
                 "enhance": enhance_lvl,
-                "file": os.path.basename(output_file),
+                "file": os.path.basename(actual_output),
+                "screenshot": os.path.basename(frame_png),
                 "time": round(elapsed, 1),
             })
             print(f"{elapsed:.1f}s")
