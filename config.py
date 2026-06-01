@@ -9,7 +9,7 @@ BATCH_HD     = os.path.expanduser("~/Documents/vids/batch/hd")
 
 # ── Upscale ladder ────────────────────────────────────────────────────────────
 UPSCALE_CEILING = 1440
-UPSCALE_STEPS   = [720, 1080, 1440]
+UPSCALE_STEPS   = [480, 720, 1080, 1440]
 AUTO_DEFAULT_LEVEL = 2
 
 # Standard short-side sizes. Any source snaps to the closest one before lookup.
