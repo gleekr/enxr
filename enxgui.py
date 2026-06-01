@@ -103,9 +103,13 @@ def _print_streams_detected(w: int, h: int, short_side: int,
     ceiling = get_ceiling(short_side)
     orientation = "portrait" if is_portrait else "landscape"
     if ceiling:
-        w = int(ceiling * 16 / 9) if not is_portrait else int(ceiling * 9 / 16)
+        long_side = int(ceiling * 16 / 9)
+        if is_portrait:
+            display = f"{ceiling}x{long_side}"
+        else:
+            display = f"{long_side}x{ceiling}"
         print(f"\n{Color.BOLD}Ceiling:{Color.RESET} {ceiling}p short side")
-        print(f"  {Color.DIM}(max {ceiling}x{w} {orientation}){Color.RESET}")
+        print(f"  {Color.DIM}(max {display} {orientation}){Color.RESET}")
     else:
         print(f"\n{Color.BOLD}Ceiling:{Color.RESET} {Color.DIM}at or above 1440p (no upscale){Color.RESET}")
 
