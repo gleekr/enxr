@@ -100,24 +100,24 @@ def _print_streams_detected(w: int, h: int, short_side: int,
             print(f"  {Color.GREEN}* {opt['label']}{Color.RESET}")
         else:
             print(f"    {opt['label']}")
+    ceiling = get_ceiling(short_side)
     orientation = "portrait" if is_portrait else "landscape"
-    print(f"\n{Color.BOLD}Ceiling:{Color.RESET} 1440p short side")
-    print(f"  {Color.DIM}(max {'1440x2560' if is_portrait else '2560x1440'} "
-          f"{orientation}){Color.RESET}")
+    if ceiling:
+        w = int(ceiling * 16 / 9) if not is_portrait else int(ceiling * 9 / 16)
+        print(f"\n{Color.BOLD}Ceiling:{Color.RESET} {ceiling}p short side")
+        print(f"  {Color.DIM}(max {ceiling}x{w} {orientation}){Color.RESET}")
+    else:
+        print(f"\n{Color.BOLD}Ceiling:{Color.RESET} {Color.DIM}at or above 1440p (no upscale){Color.RESET}")
 
 
 def prompt_resolution(options: list, short_side: int,
                       skip_prompts: bool = False) -> int:
     """Prompt 1 -- target resolution based on source. Returns target short-side.
-    If the source is at/above the ceiling, the only option is source (no scale).
+    Always shows source (0) as an option, plus any valid upscale targets.
     """
-    recommended = options[-1]['target']
+    recommended = options[-1]['target'] if options else short_side
     if skip_prompts:
         return recommended
-    if len(options) == 1:                       # source at/above ceiling
-        print(f"\n{Color.BOLD}Resolution:{Color.RESET} "
-              f"{Color.DIM}source {short_side}p (already at ceiling, no upscale){Color.RESET}")
-        return options[0]['target']
     print(f"\n{Color.BOLD}1. Resolution:{Color.RESET} "
           f"{Color.DIM}(source {short_side}p){Color.RESET}")
     print(f"  0 - source {short_side}p {Color.DIM}(no upscale){Color.RESET}")
