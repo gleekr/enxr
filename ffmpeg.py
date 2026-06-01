@@ -338,13 +338,13 @@ def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def _parse_args(args: list):
-    path = restore = enhance_lvl = target_res = ceiling = None
-    restore, enhance_lvl = 2, 3
+    path = denoise = enhance_lvl = target_res = ceiling = None
+    denoise, enhance_lvl = "med", 3
     i = 0
     while i < len(args):
         a = args[i]
-        if a == "--restore" and i + 1 < len(args):
-            restore = int(args[i + 1]); i += 2
+        if a == "--denoise" and i + 1 < len(args):
+            denoise = args[i + 1]; i += 2
         elif a == "--enhance" and i + 1 < len(args):
             enhance_lvl = int(args[i + 1]); i += 2
         elif a == "--res" and i + 1 < len(args):
@@ -357,7 +357,7 @@ def _parse_args(args: list):
             path = a; i += 1
         else:
             i += 1
-    return path, restore, enhance_lvl, target_res, ceiling
+    return path, denoise, enhance_lvl, target_res, ceiling
 
 
 def main() -> None:
@@ -366,14 +366,14 @@ def main() -> None:
         print(__doc__)
         sys.exit(0 if args else 1)
 
-    path, restore, enhance_lvl, target_res, ceiling = _parse_args(args)
+    path, denoise, enhance_lvl, target_res, ceiling = _parse_args(args)
 
     if not path:
         print("error: no input file specified", file=sys.stderr)
         sys.exit(1)
 
     try:
-        out = enhance(path, restore_level=restore, enhance_level=enhance_lvl,
+        out = enhance(path, denoise_preset=denoise, enhance_level=enhance_lvl,
                       target_res=target_res, ceiling=ceiling)
         print(f"[OK] {out}")
     except Exception as e:

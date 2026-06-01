@@ -157,15 +157,16 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
     # ── 3-prompt step machine: resolution -> restore -> enhance ───────────────
     # 'back' steps to the previous prompt; 'back' at the first unwinds to menu.
     ans   = {}
-    steps = ['resolution', 'restore', 'enhance']
+    steps = ['resolution', 'denoise', 'enhance']
     i = 0
     while i < len(steps):
         step = steps[i]
         try:
             if step == 'resolution':
                 ans['target_res'] = enxgui.prompt_resolution(options, short_side, skip_prompts)
-            elif step == 'restore':
-                ans['restore'] = enxgui.prompt_restore(skip_prompts, suggested=tier)
+            elif step == 'denoise':
+                tier_to_preset = {1: "fast", 2: "med", 3: "med", 4: "slow", 5: "slow"}
+                ans['denoise'] = enxgui.prompt_denoise(skip_prompts, suggested=tier_to_preset.get(tier, "med"))
             elif step == 'enhance':
                 ans['enhance'] = enxgui.prompt_enhance(skip_prompts)
         except GoBack:
@@ -176,9 +177,9 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
             continue
         i += 1
 
-    target_res    = ans['target_res']
-    restore_level = ans['restore']
-    enhance_level = ans['enhance']
+    target_res      = ans['target_res']
+    denoise_preset  = ans['denoise']
+    enhance_level   = ans['enhance']
 
     try:
         # Render time estimate / calibration
@@ -188,7 +189,7 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
         if cal_key not in cal:
             print(f"\n  {Color.DIM}[first run] calibrating encoder speed...{Color.RESET}")
             try:
-                cal_vf = build_chain(restore_level, enhance_level, target_res,
+                cal_vf = build_chain(denoise_preset, enhance_level, target_res,
                                      is_portrait, target_res > short_side)
                 run_calibration(file_path, cal_vf, target_res)
                 cal = load_calibration()
@@ -201,7 +202,7 @@ def action_enhance_file(file_path: str, skip_prompts: bool = False):
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         t0  = time.time()
-        out = enhance(file_path, restore_level=restore_level,
+        out = enhance(file_path, denoise_preset=denoise_preset,
                       enhance_level=enhance_level, target_res=target_res,
                       out_dir=UPRES_DEST)
         elapsed = time.time() - t0
@@ -238,7 +239,7 @@ def action_batch_folder(skip_prompts: bool = False):
     if confirm not in ('y', 'yes'):
         return
 
-    restore_level = enxgui.prompt_restore(skip_prompts)
+    denoise_preset = enxgui.prompt_denoise(skip_prompts)
     enhance_level = enxgui.prompt_enhance(skip_prompts)
 
     success = 0
@@ -252,7 +253,7 @@ def action_batch_folder(skip_prompts: bool = False):
             _, _, _, short_side, _ = _get_dims(file_path)
             ceiling = get_ceiling(short_side)
 
-            out = enhance(file_path, restore_level=restore_level,
+            out = enhance(file_path, denoise_preset=denoise_preset,
                           enhance_level=enhance_level, ceiling=ceiling,
                           skip_existing=True)
             print(f"  {Color.GREEN}* {os.path.basename(out)}{Color.RESET}")

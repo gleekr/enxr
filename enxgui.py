@@ -156,19 +156,37 @@ def _prompt_level(title: str, lines: list, default: int,
         print("  invalid, enter 0-5, enter for default (or 'back')")
 
 
-def prompt_restore(skip_prompts: bool = False, suggested: int = 2) -> int:
-    """Prompt 2 -- restore (deblock/deband) strength 0-5. suggested = auto tier."""
-    return _prompt_level(
-        "2. Restore level",
-        ["  0 - none",
-         "  1 - light",
-         "  2 - mild       (clean source)",
-         "  3 - standard   (typical YT)",
-         "  4 - aggressive (compressed)",
-         "  5 - max        (broken source)"],
-        default=max(0, min(5, suggested)),
-        skip_prompts=skip_prompts,
-    )
+def prompt_denoise(skip_prompts: bool = False, suggested: str = "med") -> str:
+    """Prompt 2 -- denoise preset: slow (best), med (1x realtime), fast (clean), very_fast (batch)."""
+    presets = {
+        "1": "slow",
+        "2": "med",
+        "3": "fast",
+        "4": "very_fast",
+    }
+    default_key = {
+        "slow": "1",
+        "med": "2",
+        "fast": "3",
+        "very_fast": "4",
+    }.get(suggested, "2")
+
+    if skip_prompts:
+        return suggested
+
+    print(f"\n{Color.BOLD}2. Denoise:{Color.RESET}")
+    print("  1 - slow       (best quality, slower encode)")
+    print("  2 - med        (balanced, ~1x realtime)")
+    print("  3 - fast       (light, for clean clips)")
+    print("  4 - very_fast  (off, for batch/nice clips)")
+
+    while True:
+        choice = _ask(f"{Color.BOLD}Choice (1-4, enter for {default_key}):{Color.RESET} ").strip()
+        if choice == "":
+            return presets.get(default_key, "med")
+        if choice in presets:
+            return presets[choice]
+        print(f"  invalid, enter 1-4")
 
 
 def prompt_enhance(skip_prompts: bool = False, default: int = 3) -> int:
@@ -224,10 +242,11 @@ def main() -> None:
 
         _print_streams_detected(w, h, short_side, is_portrait, options, tier)
 
-        # 3 prompts: resolution -> restore -> enhance
-        target_res    = prompt_resolution(options, short_side, skip_all_prompts)
-        restore_level = prompt_restore(skip_all_prompts, suggested=tier)
-        enhance_level = prompt_enhance(skip_all_prompts)
+        # 3 prompts: resolution -> denoise -> enhance
+        target_res      = prompt_resolution(options, short_side, skip_all_prompts)
+        tier_to_preset  = {1: "fast", 2: "med", 3: "med", 4: "slow", 5: "slow"}
+        denoise_preset  = prompt_denoise(skip_all_prompts, suggested=tier_to_preset.get(tier, "med"))
+        enhance_level   = prompt_enhance(skip_all_prompts)
 
         # Render time estimate / calibration
         duration = get_duration(path)
@@ -236,7 +255,7 @@ def main() -> None:
         if cal_key not in cal:
             print(f"\n  {Color.DIM}[first run] calibrating encoder speed...{Color.RESET}")
             try:
-                cal_vf = build_chain(restore_level, enhance_level, target_res,
+                cal_vf = build_chain(denoise_preset, enhance_level, target_res,
                                      is_portrait, target_res > short_side)
                 run_calibration(path, cal_vf, target_res)
                 cal = load_calibration()
@@ -249,7 +268,7 @@ def main() -> None:
 
         print(f"\n{Color.CYAN}Processing...{Color.RESET}")
         t0  = time.time()
-        out = enhance(path, restore_level=restore_level, enhance_level=enhance_level,
+        out = enhance(path, denoise_preset=denoise_preset, enhance_level=enhance_level,
                       target_res=target_res)
         elapsed = time.time() - t0
         try:
