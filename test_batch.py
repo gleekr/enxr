@@ -16,14 +16,16 @@ from ffmpeg import enhance, _get_dims, get_ceiling, get_duration
 from config import UPRES_DEST, build_chain
 
 
-# Test matrix: restore levels x enhance levels
-# Pruned to avoid combinatorial explosion
+# Test matrix: denoise presets x enhance levels
 TEST_COMBOS = [
-    (0, 0),  # baseline: no processing
-    (1, 0), (0, 1),  # single-axis
-    (1, 1), (1, 2), (2, 1), (2, 2),  # light combos
-    (2, 3), (3, 2), (3, 3),  # moderate
-    (4, 2), (3, 4),  # heavier
+    ("very_fast", 0),  # batch/no processing
+    ("very_fast", 2),  # batch + light sharpen
+    ("fast", 1),       # clean clips + light
+    ("fast", 2),       # clean clips + standard
+    ("med", 2),        # balanced (1x realtime)
+    ("med", 3),        # balanced + extra sharpen
+    ("slow", 2),       # best quality (slow)
+    ("slow", 3),       # best + extra sharpen
 ]
 
 
@@ -70,23 +72,23 @@ def main():
     results = []
     base_name = Path(input_file).stem
 
-    for i, (restore, enhance_lvl) in enumerate(TEST_COMBOS, 1):
-        output_file = os.path.join(output_dir, f"{base_name}_{restore}-{enhance_lvl}.mp4")
+    for i, (denoise, enhance_lvl) in enumerate(TEST_COMBOS, 1):
+        output_file = os.path.join(output_dir, f"{base_name}_{denoise}-{enhance_lvl}.mp4")
 
-        print(f"[{i}/{len(TEST_COMBOS)}] restore={restore} enhance={enhance_lvl}...", end=" ", flush=True)
+        print(f"[{i}/{len(TEST_COMBOS)}] denoise={denoise} enhance={enhance_lvl}...", end=" ", flush=True)
         t0 = time.time()
 
         try:
-            actual_output = enhance(input_file, restore_level=restore, enhance_level=enhance_lvl,
+            actual_output = enhance(input_file, denoise_preset=denoise, enhance_level=enhance_lvl,
                                    target_res=target_res, out_dir=output_dir)
             elapsed = time.time() - t0
 
             # Capture frame for quick comparison
-            frame_png = os.path.join(output_dir, f"{base_name}_{restore}-{enhance_lvl}.png")
+            frame_png = os.path.join(output_dir, f"{base_name}_{denoise}-{enhance_lvl}.png")
             capture_frame(actual_output, frame_png, timestamp=2.0)
 
             results.append({
-                "restore": restore,
+                "denoise": denoise,
                 "enhance": enhance_lvl,
                 "file": os.path.basename(actual_output),
                 "screenshot": os.path.basename(frame_png),

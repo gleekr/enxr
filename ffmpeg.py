@@ -254,14 +254,14 @@ def _encode(path: str, tmp_path: str, vf: str, progress_cb=None) -> None:
 
 # ── main enhance (single pass) ──────────────────────────────────────────────────
 
-def enhance(path: str, restore_level: int = 2, enhance_level: int = 3,
+def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
             target_res: int = None, ceiling: int = None, out_dir: str = None,
             keep_original: bool = False, skip_existing: bool = False,
             user_filters: list = None, progress_cb=None) -> str:
     """
-    Single-pass restore + sharpen + scale (one encode).
+    Single-pass denoise + sharpen + scale (one encode).
 
-    restore_level: 0-5 deblock/deband strength (0 = none).
+    denoise_preset: "slow" (best), "med" (1x realtime), "fast" (clean), "very_fast" (batch).
     enhance_level: 0-5 unsharp strength (0 = none).
     target_res:    explicit scale target short-side (e.g. 1440). None = derive.
     ceiling:       0 = source lock (no scale). None = auto from source.
@@ -284,8 +284,9 @@ def enhance(path: str, restore_level: int = 2, enhance_level: int = 3,
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    restore_level = max(0, min(5, int(restore_level)))
     enhance_level = max(0, min(5, int(enhance_level)))
+    if denoise_preset not in ("slow", "med", "fast", "very_fast"):
+        denoise_preset = "med"
 
     out_path = os.path.join(final_dir, f"ex{name}.mp4")
     if skip_existing and os.path.isfile(out_path):
@@ -305,19 +306,19 @@ def enhance(path: str, restore_level: int = 2, enhance_level: int = 3,
 
     do_scale = eff_target > short_side
 
-    # Nothing to do -- no restore, no sharpen, no scale
-    if restore_level == 0 and enhance_level == 0 and not do_scale:
-        print("[ffmpeg] nothing to do (restore=0, enhance=0, no scale)")
+    # Nothing to do -- no denoise, no sharpen, no scale
+    if denoise_preset == "very_fast" and enhance_level == 0 and not do_scale:
+        print("[ffmpeg] nothing to do (denoise=off, enhance=0, no scale)")
         return path
 
-    vf      = build_chain(restore_level, enhance_level, eff_target,
+    vf      = build_chain(denoise_preset, enhance_level, eff_target,
                           is_portrait, do_scale, user_filters)
     tmp_enc = os.path.join(dirname, f"tmp_{name}_enc.mp4")
 
     stage = (f"{short_side}p -> {eff_target}p" if do_scale else f"{short_side}p")
-    print(f"[ffmpeg] {stage}  restore={restore_level} enhance={enhance_level}")
+    print(f"[ffmpeg] {stage}  denoise={denoise_preset} enhance={enhance_level}")
     if progress_cb:
-        progress_cb(f"__stage__:enhance:{stage} r{restore_level} e{enhance_level}")
+        progress_cb(f"__stage__:enhance:{stage} denoise={denoise_preset} e{enhance_level}")
 
     try:
         _encode(path, tmp_enc, vf, progress_cb=progress_cb)

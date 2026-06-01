@@ -94,17 +94,13 @@ class QualityTier(Enum):
     POOR      = 4
     BROKEN    = 5
 
-# ── Restore table (deblock/deband, level 0-5) ─────────────────────────────────
-RESTORE = {
-    0: [],
-    1: ["deblock=filter=weak:block=4:alpha=0.02:beta=0.02:gamma=0.02:delta=0.02"],
-    2: ["deblock=filter=strong:block=4:alpha=0.04:beta=0.04:gamma=0.04:delta=0.04"],
-    3: ["deblock=filter=strong:block=4:alpha=0.07:beta=0.07:gamma=0.07:delta=0.07",
-        "deband=range=14:direction=0:blur=1"],
-    4: ["deblock=filter=strong:block=8:alpha=0.10:beta=0.10:gamma=0.10:delta=0.10",
-        "deband=range=18:direction=0:blur=1"],
-    5: ["deblock=filter=strong:block=8:alpha=0.14:beta=0.14:gamma=0.14:delta=0.14",
-        "deband=range=22:direction=0:blur=1"],
+# ── Denoise presets (nlmeans by quality/speed tier) ──────────────────────────
+# Tuned for: slow (best), med (1x realtime), fast (clean clips), very_fast (batch)
+DENOISE = {
+    "slow":      ["nlmeans=s=4:p=9:r=18"],
+    "med":       ["nlmeans=s=2:p=6:r=12"],
+    "fast":      ["nlmeans=s=1:p=4:r=8"],
+    "very_fast": [],
 }
 
 # ── Sharpen table (unsharp luma-only, level 0-5) ──────────────────────────────
@@ -122,11 +118,11 @@ def _clamp(level: int) -> int:
     return max(0, min(5, int(level)))
 
 
-def build_chain(restore_level: int, enhance_level: int, target: int,
+def build_chain(denoise_preset: str, enhance_level: int, target: int,
                 is_portrait: bool, do_scale: bool, user_filters=None) -> str:
-    """Single-pass filtergraph: format -> restore -> sharpen -> [scale] -> format."""
+    """Single-pass filtergraph: format -> denoise -> sharpen -> [scale] -> format."""
     filters = ["format=yuv420p"]
-    filters += RESTORE.get(_clamp(restore_level), [])
+    filters += DENOISE.get(denoise_preset, [])
     filters += SHARPEN.get(_clamp(enhance_level), [])
     if user_filters:
         filters += list(user_filters)
