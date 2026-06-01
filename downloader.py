@@ -5,12 +5,13 @@ import os, subprocess
 from config import DEFAULT_DEST, COOKIE_BROWSER, COOKIE_FILE, POT_SERVER_URL
 
 
-def _ytdlp() -> list[str]:
+def _ytdlp(fmt: str = "mp4") -> list[str]:
     client = "mweb" if POT_SERVER_URL else "android"
+    merge_fmt = "webm" if fmt == "webm" else "mp4"
     args = [
         "yt-dlp",
         "-f", "bv*+ba/bv*/b",
-        "--merge-output-format", "mp4",
+        "--merge-output-format", merge_fmt,
         "--concurrent-fragments", "16",
         "--retries", "10",
         "--fragment-retries", "10",
@@ -32,10 +33,10 @@ def _is_url(s: str) -> bool:
     return s.startswith(("http://", "https://", "ftp://"))
 
 
-def download(url: str, dest: str = DEFAULT_DEST) -> str | None:
+def download(url: str, dest: str = DEFAULT_DEST, fmt: str = "mp4") -> str | None:
     os.makedirs(dest, exist_ok=True)
     outtmpl = os.path.join(dest, "%(id)s.%(ext)s")
-    cmd = _ytdlp() + ["-o", outtmpl, "--print", "after_move:filepath", url]
+    cmd = _ytdlp(fmt) + ["-o", outtmpl, "--print", "after_move:filepath", url]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
     stdout, _ = proc.communicate()
     lines = [l.strip() for l in stdout.splitlines() if l.strip()]

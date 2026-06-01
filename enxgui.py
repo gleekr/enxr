@@ -204,6 +204,24 @@ def prompt_enhance(skip_prompts: bool = False, default: int = 3) -> int:
     )
 
 
+def prompt_download_format(skip_prompts: bool = False) -> str:
+    """Prompt -- download format for URL downloads: webm or mp4."""
+    if skip_prompts:
+        return "mp4"
+
+    print(f"\n{Color.BOLD}Download format:{Color.RESET}")
+    print("  1 - webm  (smaller, VP9 codec)")
+    print("  2 - mp4   (compatibility, H.264)")
+
+    while True:
+        choice = _ask(f"{Color.BOLD}Choice (1-2, enter for 2):{Color.RESET} ").strip()
+        if choice == "" or choice == "2":
+            return "mp4"
+        if choice == "1":
+            return "webm"
+        print(f"  invalid, enter 1-2")
+
+
 def _parse_gui_args(args: list) -> tuple:
     path = None
     skip_prompts_flag = False

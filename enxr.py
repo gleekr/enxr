@@ -109,8 +109,9 @@ def action_fetch_enhance(skip_prompts: bool = False):
     source = _input(f"{Color.BOLD}Paste URL or file path:{Color.RESET} ")
 
     if _is_url(source):
-        print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
-        video_file = download(source, DEFAULT_DEST)
+        dl_format = enxgui.prompt_download_format(skip_prompts)
+        print(f"\n{Color.YELLOW}Downloading ({dl_format})...{Color.RESET}")
+        video_file = download(source, DEFAULT_DEST, fmt=dl_format)
         if not video_file:
             print(f"{Color.RED}Download failed.{Color.RESET}")
             return
