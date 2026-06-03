@@ -4,8 +4,13 @@ import os, subprocess
 
 from config import DEFAULT_DEST, COOKIE_BROWSER, COOKIE_FILE, POT_SERVER_URL
 
+SUPPORTED_COOKIE_BROWSERS = ("safari", "brave", "chrome", "firefox", "chromium", "edge")
 
-def _ytdlp(fmt: str = "mp4") -> list[str]:
+
+def _ytdlp(fmt: str = "mp4", cookie_browser: str | None = ...) -> list[str]:
+    # ... sentinel: use the auto-detected config value
+    if cookie_browser is ...:
+        cookie_browser = COOKIE_BROWSER
     client = "mweb" if POT_SERVER_URL else "android"
     merge_fmt = "webm" if fmt == "webm" else "mp4"
     args = [
@@ -22,8 +27,8 @@ def _ytdlp(fmt: str = "mp4") -> list[str]:
     ]
     if POT_SERVER_URL:
         args += ["--extractor-args", f"youtubepot-bgutilhttp:base_url={POT_SERVER_URL}"]
-    if COOKIE_BROWSER:
-        args += ["--cookies-from-browser", COOKIE_BROWSER]
+    if cookie_browser:
+        args += ["--cookies-from-browser", cookie_browser]
     elif COOKIE_FILE:
         args += ["--cookies", COOKIE_FILE]
     return args
@@ -33,10 +38,11 @@ def _is_url(s: str) -> bool:
     return s.startswith(("http://", "https://", "ftp://"))
 
 
-def download(url: str, dest: str = DEFAULT_DEST, fmt: str = "mp4") -> str | None:
+def download(url: str, dest: str = DEFAULT_DEST, fmt: str = "mp4",
+             cookie_browser: str | None = ...) -> str | None:
     os.makedirs(dest, exist_ok=True)
     outtmpl = os.path.join(dest, "%(id)s.%(ext)s")
-    cmd = _ytdlp(fmt) + ["-o", outtmpl, "--print", "after_move:filepath", url]
+    cmd = _ytdlp(fmt, cookie_browser) + ["-o", outtmpl, "--print", "after_move:filepath", url]
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
     stdout, _ = proc.communicate()
     lines = [l.strip() for l in stdout.splitlines() if l.strip()]
