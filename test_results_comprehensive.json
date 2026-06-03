@@ -1,0 +1,132 @@
+{
+  "quick": true,
+  "clips": [
+    {
+      "clip": "broken_360p.mp4",
+      "source": {
+        "w": 640,
+        "h": 360,
+        "short_side": 360,
+        "codec": "h264"
+      },
+      "target": 480,
+      "tests": {
+        "very_fast/0": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "854x480",
+          "time_sec": 1.5,
+          "size_mb": 0.5
+        },
+        "very_fast/2": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "854x480",
+          "time_sec": 1.3,
+          "size_mb": 0.6
+        }
+      }
+    },
+    {
+      "clip": "fair_1080p_banding.mp4",
+      "source": {
+        "w": 1920,
+        "h": 1080,
+        "short_side": 1080,
+        "codec": "h264"
+      },
+      "target": 1440,
+      "tests": {
+        "very_fast/0": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "2560x1440",
+          "time_sec": 2.1,
+          "size_mb": 0.2
+        },
+        "very_fast/2": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "2560x1440",
+          "time_sec": 2.3,
+          "size_mb": 0.2
+        }
+      }
+    },
+    {
+      "clip": "fair_480p.mp4",
+      "source": {
+        "w": 854,
+        "h": 480,
+        "short_side": 480,
+        "codec": "h264"
+      },
+      "target": 720,
+      "tests": {
+        "very_fast/0": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "1282x720",
+          "time_sec": 1.4,
+          "size_mb": 0.9
+        },
+        "very_fast/2": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "1282x720",
+          "time_sec": 1.5,
+          "size_mb": 1.0
+        }
+      }
+    },
+    {
+      "clip": "good_1440p.mp4",
+      "source": {
+        "w": 2560,
+        "h": 1440,
+        "short_side": 1440,
+        "codec": "h264"
+      },
+      "target": 1440,
+      "tests": {
+        "very_fast/0": {
+          "status": "FAIL",
+          "reason": "encode failed silently"
+        },
+        "very_fast/2": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "2560x1440",
+          "time_sec": 2.6,
+          "size_mb": 5.3
+        }
+      }
+    },
+    {
+      "clip": "poor_720p.mp4",
+      "source": {
+        "w": 1280,
+        "h": 720,
+        "short_side": 720,
+        "codec": "h264"
+      },
+      "target": 1080,
+      "tests": {
+        "very_fast/0": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "1920x1080",
+          "time_sec": 1.6,
+          "size_mb": 2.1
+        },
+        "very_fast/2": {
+          "status": "PASS",
+          "codec": "h264",
+          "dims": "1920x1080",
+          "time_sec": 1.7,
+          "size_mb": 2.3
+        }
+      }
+    }
+  ]
+}
