@@ -172,10 +172,10 @@ def main():
             result = test_clip(clip, tmpdir, quick)
             all_results["clips"].append(result)
 
-            print(f"\n{clip.name}  {result['source']['short_side']}p -> {result.get('target', '?')}p")
             if result.get("status") == "SKIP":
-                print(f"  SKIP: {result.get('reason')}")
+                print(f"\n{clip.name}  SKIP: {result.get('reason')}")
                 continue
+            print(f"\n{clip.name}  {result['source']['short_side']}p -> {result.get('target', '?')}p")
 
             for tag, test in result.get("tests", {}).items():
                 status = test.get("status", "?")
