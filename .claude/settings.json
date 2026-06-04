@@ -15,7 +15,11 @@
       "Bash(git checkout *)",
       "Bash(python -c \"import ast; ast.parse\\(open\\('downloader.py',encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('enxr.py',encoding='utf-8'\\).read\\(\\)\\); print\\('both parse OK'\\)\")",
       "Bash(python -c \"import enxr, enxgui, ffmpeg, config, downloader; print\\('imports OK'\\)\")",
-      "Bash(python -c \"print\\(open\\('enxgui.py',encoding='utf-8'\\).read\\(\\)\\)\")"
+      "Bash(python -c \"print\\(open\\('enxgui.py',encoding='utf-8'\\).read\\(\\)\\)\")",
+      "Bash(bash run_tests.sh *)",
+      "Bash(python test_bench.py *)",
+      "Bash(python test_comprehensive.py *)",
+      "Bash(python test_batch.py *)"
     ],
     "deny": [
       "Read(/)",
