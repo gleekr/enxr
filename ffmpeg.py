@@ -13,7 +13,7 @@ Usage:
                                [--res 720|1080|1440] [--source]
 """
 
-import os, sys, subprocess, json, time, platform
+import os, sys, shutil, subprocess, json, time, platform
 
 from config import build_chain, get_ceiling
 from logger import log_error, cleanup_tmp
@@ -23,6 +23,9 @@ from logger import log_error, cleanup_tmp
 
 def _get_dims(path: str) -> tuple:
     """Returns (width, height, is_portrait, short_side, codec_name)."""
+    if shutil.which("ffprobe") is None:
+        raise FileNotFoundError("ffprobe not found -- is FFmpeg installed and on PATH?")
+
     try:
         result = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -32,12 +35,13 @@ def _get_dims(path: str) -> tuple:
         streams = json.loads(result.stdout).get("streams", [])
         if not streams:
             raise ValueError(f"no video stream found in: {path}")
-        w     = int(streams[0]["width"])
-        h     = int(streams[0]["height"])
+        w = int(streams[0]["width"])
+        h = int(streams[0]["height"])
         codec = streams[0].get("codec_name", "unknown")
         return w, h, h > w, min(w, h), codec
-    except FileNotFoundError:
-        raise FileNotFoundError("ffprobe not found -- is FFmpeg installed and on PATH?")
+    except subprocess.CalledProcessError as e:
+        stderr = (e.stderr or "").strip()
+        raise RuntimeError(f"ffprobe failed: {stderr or 'unknown error'}")
 
 
 # get_ceiling is imported from config (single source of truth for the ladder).
@@ -152,9 +156,9 @@ def _file_valid(path: str) -> bool:
         r = subprocess.run(
             ["ffprobe", "-v", "error", "-select_streams", "v:0",
              "-show_entries", "stream=codec_type", "-of", "json", path],
-            capture_output=True, timeout=8,
+            capture_output=True, text=True, timeout=8,
         )
-        return r.returncode == 0 and b"video" in r.stdout
+        return r.returncode == 0 and "video" in r.stdout
     except Exception:
         return False
 
@@ -222,6 +226,15 @@ def _ffmpeg_errors(stderr: str) -> str:
     lines = [l for l in lines if not l.strip().startswith("configuration:")]
     relevant = [l.strip() for l in lines if any(k in l.lower() for k in keywords)]
     return " | ".join(relevant[-5:]) if relevant else (lines[-1].strip() if lines else "encode failed")
+
+
+def _check_ffmpeg_tools() -> bool:
+    """Verify FFmpeg and ffprobe are available on PATH."""
+    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
+    if missing:
+        print(f"[ffmpeg] missing required tool(s): {', '.join(missing)}")
+        return False
+    return True
 
 
 def _encode(path: str, tmp_path: str, vf: str, denoise_preset: str = "med", progress_cb=None) -> None:
@@ -302,8 +315,10 @@ def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
 
     out_path = os.path.join(final_dir, f"ex{name}.mp4")
     if skip_existing and os.path.isfile(out_path):
-        print(f"[ffmpeg] skip -- already enhanced: {os.path.basename(out_path)}")
-        return out_path
+        if _file_valid(out_path):
+            print(f"[ffmpeg] skip -- already enhanced: {os.path.basename(out_path)}")
+            return out_path
+        print(f"[ffmpeg] existing output is invalid or incomplete, re-encoding: {os.path.basename(out_path)}")
 
     # Derive effective scale target
     if ceiling == 0:
@@ -333,12 +348,20 @@ def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
         progress_cb(f"__stage__:enhance:{stage} denoise={denoise_preset} e{enhance_level}")
 
     try:
+        if not _check_ffmpeg_tools():
+            raise FileNotFoundError("FFmpeg or ffprobe is not available on PATH")
+
         _encode(path, tmp_enc, vf, denoise_preset=denoise_preset, progress_cb=progress_cb)
         os.replace(tmp_enc, out_path)
     except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError) as e:
         log_error("enhance", e, extra=f"file={os.path.basename(path)}")
         cleanup_tmp(dirname)
-        return path
+        if os.path.isfile(tmp_enc):
+            try:
+                os.remove(tmp_enc)
+            except OSError:
+                pass
+        raise
 
     # Remove original after success (unless caller wants to keep it)
     if not keep_original and os.path.exists(path) and out_path != path:
@@ -377,6 +400,10 @@ def main() -> None:
     if not args or args[0] in ("-h", "--help"):
         print(__doc__)
         sys.exit(0 if args else 1)
+
+    if not _check_ffmpeg_tools():
+        print("error: ffmpeg or ffprobe not available on PATH", file=sys.stderr)
+        sys.exit(1)
 
     path, denoise, enhance_lvl, target_res, ceiling = _parse_args(args)
 

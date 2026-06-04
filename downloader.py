@@ -1,15 +1,22 @@
 #!/usr/bin/env python3
 """downloader.py -- yt-dlp fetch utility (single video)"""
-import os, subprocess
+import os, shutil, subprocess, time
 
 from config import DEFAULT_DEST, COOKIE_BROWSER, COOKIE_FILE, POT_SERVER_URL
+
+
+def _get_yt_dlp_path() -> str:
+    path = shutil.which("yt-dlp")
+    if path is None:
+        raise FileNotFoundError("yt-dlp not found -- install it and ensure it is on PATH")
+    return path
 
 
 def _ytdlp(fmt: str = "mp4") -> list[str]:
     client = "mweb" if POT_SERVER_URL else "android"
     merge_fmt = "webm" if fmt == "webm" else "mp4"
     args = [
-        "yt-dlp",
+        _get_yt_dlp_path(),
         "-f", "bv*+ba/bv*/b",
         "--merge-output-format", merge_fmt,
         "--concurrent-fragments", "16",
@@ -37,7 +44,28 @@ def download(url: str, dest: str = DEFAULT_DEST, fmt: str = "mp4") -> str | None
     os.makedirs(dest, exist_ok=True)
     outtmpl = os.path.join(dest, "%(id)s.%(ext)s")
     cmd = _ytdlp(fmt) + ["-o", outtmpl, "--print", "after_move:filepath", url]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True)
-    stdout, _ = proc.communicate()
+    start_ts = time.time()
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        stdout, stderr = proc.communicate(timeout=1800)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        stdout, stderr = proc.communicate()
+        raise RuntimeError("yt-dlp timed out after 30 minutes")
+
+    if proc.returncode != 0:
+        message = stderr.strip() or stdout.strip()
+        raise RuntimeError(f"yt-dlp failed (exit {proc.returncode}): {message}")
+
     lines = [l.strip() for l in stdout.splitlines() if l.strip()]
-    return lines[-1] if proc.returncode == 0 and lines else None
+    if lines:
+        return lines[-1]
+
+    # Fallback: if yt-dlp did not print the final file path, find the newest file created after this run.
+    candidates = [os.path.join(dest, f) for f in os.listdir(dest)
+                  if os.path.isfile(os.path.join(dest, f)) and os.path.getmtime(os.path.join(dest, f)) >= start_ts]
+    if not candidates:
+        return None
+    newest = max(candidates, key=os.path.getmtime)
+    return newest

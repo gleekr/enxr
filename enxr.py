@@ -16,7 +16,7 @@ import os, sys, shutil
 import time
 
 from downloader import download, _is_url, DEFAULT_DEST
-from ffmpeg import _get_dims, get_ceiling, enhance
+from ffmpeg import _check_ffmpeg_tools, _get_dims, get_ceiling, enhance
 from logger import log_error
 from config import UPRES_DEST, build_chain
 from calibration import (load_calibration, run_calibration, estimate_time,
@@ -45,15 +45,20 @@ def _check_skip_context() -> bool:
 
 
 def _check_deps() -> bool:
-    """Verify ffmpeg + ffprobe are on PATH. Print a clear message if not.
-    yt-dlp is a Python import and fails at module load, so it isn't checked here.
-    Returns True if all present.
-    """
-    missing = [tool for tool in ("ffmpeg", "ffprobe") if shutil.which(tool) is None]
-    if missing:
-        print(f"{Color.RED}Missing required tool(s): {', '.join(missing)}{Color.RESET}")
+    """Verify ffmpeg + ffprobe are on PATH. Returns True if all present."""
+    if not _check_ffmpeg_tools():
+        print(f"{Color.RED}Missing required tool(s): ffmpeg, ffprobe{Color.RESET}")
         print(f"  {Color.DIM}Install FFmpeg and ensure it's on PATH "
               f"(a-shell: 'pkg install ffmpeg').{Color.RESET}")
+        return False
+    return True
+
+
+def _check_yt_dlp() -> bool:
+    """Verify yt-dlp is on PATH. Print a clear message if not."""
+    if shutil.which("yt-dlp") is None:
+        print(f"{Color.RED}Missing required tool: yt-dlp{Color.RESET}")
+        print(f"  {Color.DIM}Install yt-dlp and ensure it's on PATH.{Color.RESET}")
         return False
     return True
 
@@ -109,9 +114,17 @@ def action_fetch_enhance(skip_prompts: bool = False):
     source = _input(f"{Color.BOLD}Paste URL or file path:{Color.RESET} ")
 
     if _is_url(source):
+        if not _check_yt_dlp():
+            return
         dl_format = enxgui.prompt_download_format(skip_prompts)
         print(f"\n{Color.YELLOW}Downloading ({dl_format})...{Color.RESET}")
-        video_file = download(source, DEFAULT_DEST, fmt=dl_format)
+        try:
+            video_file = download(source, DEFAULT_DEST, fmt=dl_format)
+        except Exception as e:
+            log_error("download", e, extra=f"url={source}")
+            print(f"{Color.RED}Download failed: {e}{Color.RESET}")
+            return
+
         if not video_file:
             print(f"{Color.RED}Download failed.{Color.RESET}")
             return
@@ -285,6 +298,8 @@ def main():
 
         if file_or_url.startswith(('http://', 'https://', 'ftp://')):
             print(f"{Color.BOLD}Processing URL...{Color.RESET}")
+            if not _check_yt_dlp():
+                sys.exit(1)
             print(f"\n{Color.YELLOW}Downloading...{Color.RESET}")
             try:
                 video_file = download(file_or_url, DEFAULT_DEST)
