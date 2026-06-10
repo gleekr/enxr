@@ -64,13 +64,19 @@ def _get_dims(path: str) -> tuple:
 
 def _detect_tier(path: str, w: int, h: int) -> int:
     """
-    Detect quality tier 1-5 from bitrate normalized to 1080p equivalent.
+    Detect quality tier 1-5 from bitrate normalized to a 1080p equivalent.
       1 = excellent  (>5000 kbps norm)
       2 = good       (2500-5000)
       3 = fair       (1000-2500)  -- typical YT Shorts
       4 = poor       (400-1000)
       5 = broken     (<400)
     Falls back to tier 3 on any probe failure.
+
+    Normalization uses the SQUARE ROOT of the area ratio, not the full ratio.
+    Perceived quality tracks bitrate-density sub-linearly: fully crediting
+    resolution made a cleanly-encoded 360p clip look "excellent" and unlocked
+    upscaling it. sqrt keeps small sources honest (a tidy 360p lands ~poor, so
+    it's restored not enlarged) while still rewarding genuine high-res bitrate.
     """
     try:
         result = subprocess.run(
@@ -81,7 +87,7 @@ def _detect_tier(path: str, w: int, h: int) -> int:
         bit_rate = int(json.loads(result.stdout).get("format", {}).get("bit_rate", 0))
         if bit_rate <= 0:
             return 3
-        norm_kbps = (bit_rate / 1000) * ((1920 * 1080) / (w * h))
+        norm_kbps = (bit_rate / 1000) * ((1920 * 1080) / (w * h)) ** 0.5
         if norm_kbps > 5000: return 1
         if norm_kbps > 2500: return 2
         if norm_kbps > 1000: return 3
