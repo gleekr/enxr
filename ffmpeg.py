@@ -2,21 +2,34 @@
 """
 ffmpeg.py - enhance + upscale module
 
-Single-pass pipeline (one encode):
-  format -> restore (deblock/deband) -> sharpen (unsharp) -> scale -> format
+Single-pass, resolution + quality aware pipeline (one encode):
+  decode -> deblock -> denoise -> [deband + upscale] -> sharpen(CAS) -> mp4
 
-Restore and enhance(sharpen) are independent strength levels 0-5 (0 = off).
-Scaling is always the LAST operation so sharpening runs at source resolution.
+Restore strength (deblock/deband/denoise) is chosen automatically from the
+detected quality tier. deband + upscale fuse into one GPU pass via libplacebo
+(Vulkan) when available, else fall back to CPU (gradfun + zscale). Sharpen runs
+last, at the target resolution, using Contrast Adaptive Sharpen.
+
+The auto target is quality-gated (config.smart_target): footage is upscaled --
+up to 4K -- only when the source resolution and quality justify it. Poor/broken
+sources are restored at source resolution, never enlarged.
 
 Usage:
-  python3 ffmpeg.py <file.mp4> [--restore N] [--enhance N]
-                               [--res 720|1080|1440] [--source]
+  python3 ffmpeg.py <file.mp4> [--denoise slow|med|fast|very_fast] [--enhance 0-5]
+                               [--res N | --720 | --1080 | --1440 | --2160 | --4k]
+                               [--source]   # restore only, no upscale
 """
 
 import os, sys, shutil, subprocess, json, time, platform
 
-from config import build_chain, get_ceiling
+from config import build_chain, get_ceiling, smart_target, DEBAND_TIERS
 from logger import log_error, cleanup_tmp
+
+
+# Bitrate targets (bps) for hardware encoders, keyed by output short side.
+# Hardware encoders are bitrate-driven (no CRF), so we pick a sane ceiling.
+_HW_BITRATE = {360: 1_500_000, 480: 2_500_000, 720: 5_000_000,
+               1080: 8_000_000, 1440: 16_000_000, 2160: 35_000_000}
 
 
 # ── dimension + step helpers ─────────────────────────────────────────────────
@@ -78,6 +91,17 @@ def _detect_tier(path: str, w: int, h: int) -> int:
         return 3
 
 
+def _target_dims(w: int, h: int, short_side: int, target_short: int) -> tuple:
+    """Output (w, h) for a target short-side, aspect-preserved and even-rounded.
+    When target_short <= source short side, returns the source dims unchanged."""
+    if target_short <= 0 or target_short <= short_side:
+        return w, h
+    scale = target_short / short_side
+    tw = max(2, round(w * scale / 2) * 2)
+    th = max(2, round(h * scale / 2) * 2)
+    return tw, th
+
+
 # ── encoder strategy ──────────────────────────────────────────────────────────
 
 def _has_nvidia_gpu() -> bool:
@@ -106,11 +130,12 @@ def _available_encoders() -> set:
         return set()
 
 
-def _get_encoder_chain() -> list:
+def _get_encoder_chain(prefer_hw: bool = False) -> list:
     """Pick the encoder chain by what ffmpeg actually has, not the OS string
     (A-Shell/iSH report unreliable platforms). VideoToolbox is preferred on
-    Apple devices; NVENC when a dedicated NVIDIA GPU is present. libx264 is
-    always the final, guaranteed fallback.
+    Apple devices; NVENC when a dedicated NVIDIA GPU is present; Android
+    MediaCodec when prefer_hw (batch/very_fast — speed over fine control).
+    libx264 is always the final, guaranteed fallback.
     """
     have = _available_encoders()
     chain = []
@@ -119,6 +144,8 @@ def _get_encoder_chain() -> list:
         chain.append("h264_videotoolbox")
     elif "h264_nvenc" in have and _has_nvidia_gpu():
         chain.append("h264_nvenc")
+    elif prefer_hw and "h264_mediacodec" in have:
+        chain.append("h264_mediacodec")
 
     chain.append("libx264")   # always last -- proven everywhere
 
@@ -126,21 +153,32 @@ def _get_encoder_chain() -> list:
     return chain
 
 
-def _encoder_args(codec: str, denoise_preset: str = "med") -> list:
-    """Return codec-specific FFmpeg args, tuned by denoise preset.
+def _encoder_args(codec: str, denoise_preset: str = "med",
+                  target_short: int = 1080) -> list:
+    """Return codec-specific FFmpeg args, tuned by denoise preset and target res.
 
     Presets map to: very_fast (batch) → fast (clean) → med (balanced) → slow (quality)
+    Higher resolutions get a slightly lower CRF so 4K keeps its detail.
     """
     if codec in ("libx264", "libx265"):
-        # Tune preset + CRF by denoise tier
         preset_map = {
-            "very_fast": ("ultrafast", "28"),
-            "fast":      ("fast", "26"),
-            "med":       ("medium", "23"),
-            "slow":      ("slow", "22"),
+            "very_fast": ("veryfast", 25),
+            "fast":      ("fast", 23),
+            "med":       ("medium", 21),
+            "slow":      ("slow", 20),
         }
-        preset, crf = preset_map.get(denoise_preset, ("medium", "23"))
-        return ["-preset", preset, "-crf", crf, "-profile:v", "main", "-g", "250"]
+        preset, crf = preset_map.get(denoise_preset, ("medium", 21))
+        if target_short >= 2160:
+            crf -= 2
+        elif target_short >= 1440:
+            crf -= 1
+        return ["-preset", preset, "-crf", str(crf),
+                "-profile:v", "high", "-g", "250"]
+    if codec in ("h264_mediacodec", "hevc_mediacodec"):
+        # Hardware encoders are bitrate-driven; pick by output resolution.
+        bitrate = _HW_BITRATE.get(target_short, 8_000_000)
+        return ["-b:v", str(bitrate), "-maxrate", str(int(bitrate * 1.5)),
+                "-bufsize", str(bitrate * 2)]
     if codec == "libvpx":
         return ["-deadline", "good", "-cpu-used", "4", "-crf", "30"]
     if codec == "libaom":
@@ -237,31 +275,33 @@ def _check_ffmpeg_tools() -> bool:
     return True
 
 
-def _encode(path: str, tmp_path: str, vf: str, denoise_preset: str = "med", progress_cb=None) -> None:
+def _encode(path: str, tmp_path: str, vf: str, denoise_preset: str = "med",
+            target_short: int = 1080, prefer_hw: bool = False, progress_cb=None) -> None:
     """
-    Encode using OS-specific encoder chain (hardware-first).
+    Encode using the available encoder chain (hardware-first where it makes sense).
     -hwaccel none forces software decode -- required for AV1/non-native codecs.
-    Audio optional (0:a:0?) and transcoded to aac. Metadata always stripped.
-    denoise_preset tunes encoder settings (very_fast/fast/med/slow).
+    Audio optional (0:a:0?) and transcoded to aac. Metadata stripped. mp4 gets
+    +faststart for instant playback.
     """
     base_args = [
-        "ffmpeg", "-y",
-        "-hwaccel", "none",
+        "ffmpeg", "-y", "-hwaccel", "none",
         "-i", path,
         "-map", "0:v:0",
         "-map", "0:a:0?",
         "-c:a", "aac",
         "-vf", vf,
-        "-pix_fmt", "yuv420p",
         "-map_metadata", "-1",
+        "-movflags", "+faststart",
     ]
 
-    encoder_chain = _get_encoder_chain()
+    encoder_chain = _get_encoder_chain(prefer_hw=prefer_hw)
     last_error = None
 
     for codec in encoder_chain:
-        codec_args = _encoder_args(codec, denoise_preset)
-        cmd = base_args + ["-c:v", codec] + codec_args + [tmp_path]
+        codec_args = _encoder_args(codec, denoise_preset, target_short)
+        # Software encoders take an explicit pixel format; MediaCodec picks its own.
+        pix = [] if codec.endswith("_mediacodec") else ["-pix_fmt", "yuv420p"]
+        cmd = base_args + ["-c:v", codec] + codec_args + pix + [tmp_path]
 
         ok, err = _try_encode(cmd, tmp_path, progress_cb)
         if ok:
@@ -320,7 +360,14 @@ def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
             return out_path
         print(f"[ffmpeg] existing output is invalid or incomplete, re-encoding: {os.path.basename(out_path)}")
 
-    # Derive effective scale target
+    # Quality tier drives restore strength (deblock/deband/denoise) regardless of
+    # how the scale target is chosen.
+    tier = _detect_tier(path, w, h)
+    tier_name = {1: "excellent", 2: "good", 3: "fair", 4: "poor", 5: "broken"}.get(tier, "?")
+
+    # Derive effective scale target.
+    #   explicit target_res / ceiling override the smart decision (GUI, CLI flags).
+    #   otherwise the smart, quality-gated target is used (upscale only if good enough).
     if ceiling == 0:
         eff_target = short_side
     elif target_res is not None:
@@ -328,30 +375,34 @@ def enhance(path: str, denoise_preset: str = "med", enhance_level: int = 3,
     elif ceiling is not None:
         eff_target = ceiling
     else:
-        auto_ceil  = get_ceiling(short_side)
-        eff_target = auto_ceil if auto_ceil > 0 else short_side
+        eff_target = smart_target(short_side, tier)
 
     do_scale = eff_target > short_side
+    target_w, target_h = _target_dims(w, h, short_side, eff_target)
 
-    # Nothing to do -- no denoise, no sharpen, no scale
-    if denoise_preset == "very_fast" and enhance_level == 0 and not do_scale:
-        print("[ffmpeg] nothing to do (denoise=off, enhance=0, no scale)")
+    # Nothing to do -- clean tier, no sharpen, no scale
+    if tier <= 2 and enhance_level == 0 and not do_scale and not DEBAND_TIERS.get(tier):
+        print("[ffmpeg] nothing to do (clean source, no enhance, no scale)")
         return path
 
-    vf      = build_chain(denoise_preset, enhance_level, eff_target,
-                          is_portrait, do_scale, user_filters)
-    tmp_enc = os.path.join(dirname, f"tmp_{name}_enc.mp4")
+    prefer_hw = (denoise_preset == "very_fast")
+    tmp_enc   = os.path.join(dirname, f"tmp_{name}_enc.mp4")
 
-    stage = (f"{short_side}p -> {eff_target}p" if do_scale else f"{short_side}p")
-    print(f"[ffmpeg] {stage}  denoise={denoise_preset} enhance={enhance_level}")
+    stage = (f"{short_side}p -> {eff_target}p" if do_scale else f"{short_side}p (restore)")
+    print(f"[ffmpeg] {stage}  tier={tier}({tier_name}) denoise={denoise_preset} sharpen={enhance_level}")
     if progress_cb:
-        progress_cb(f"__stage__:enhance:{stage} denoise={denoise_preset} e{enhance_level}")
+        progress_cb(f"__stage__:enhance:{stage} {tier_name} denoise={denoise_preset} e{enhance_level}")
+
+    vf = build_chain(denoise_preset, enhance_level, eff_target, is_portrait,
+                     do_scale, user_filters, tier=tier,
+                     target_w=target_w, target_h=target_h)
 
     try:
         if not _check_ffmpeg_tools():
             raise FileNotFoundError("FFmpeg or ffprobe is not available on PATH")
 
-        _encode(path, tmp_enc, vf, denoise_preset=denoise_preset, progress_cb=progress_cb)
+        _encode(path, tmp_enc, vf, denoise_preset=denoise_preset,
+                target_short=eff_target, prefer_hw=prefer_hw, progress_cb=progress_cb)
         os.replace(tmp_enc, out_path)
     except (subprocess.CalledProcessError, FileNotFoundError, RuntimeError) as e:
         log_error("enhance", e, extra=f"file={os.path.basename(path)}")
@@ -384,8 +435,10 @@ def _parse_args(args: list):
             enhance_lvl = int(args[i + 1]); i += 2
         elif a == "--res" and i + 1 < len(args):
             target_res = int(args[i + 1]); i += 2
-        elif a in ("--720", "--1080", "--1440"):
+        elif a in ("--720", "--1080", "--1440", "--2160"):
             target_res = int(a.lstrip("-")); i += 1
+        elif a in ("--4k", "--4K"):
+            target_res = 2160; i += 1
         elif a == "--source":
             ceiling = 0; i += 1
         elif path is None and not a.startswith("--"):
